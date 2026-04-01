@@ -1,0 +1,9 @@
+' Создаёт ярлык на рабочем столе Windows (запуск: cscript //nologo gps-sim-ui-windows-shortcut.vbs.template после подстановки путей).
+' Замените @@EXEC_GPS_SIM_UI@@ и @@WORKING_DIR@@ на пути к .venv\Scripts\gps-sim-ui.exe и каталогу проекта.
+
+Set shell = CreateObject("WScript.Shell")
+desktop = shell.SpecialFolders("Desktop")
+Set link = shell.CreateShortcut(desktop & "\gps-sim-ui.lnk")
+link.TargetPath = "@@EXEC_GPS_SIM_UI@@"
+link.WorkingDirectory = "@@WORKING_DIR@@"
+link.Save

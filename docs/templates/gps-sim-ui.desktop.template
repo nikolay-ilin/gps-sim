@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=gps-sim-ui
+Comment=GPS simulation UI (gps-sim)
+Exec=@@EXEC_GPS_SIM_UI@@
+Icon=applications-internet
+Terminal=false
+Categories=Utility;

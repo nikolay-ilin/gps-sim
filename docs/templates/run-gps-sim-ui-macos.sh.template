@@ -1,0 +1,2 @@
+#!/bin/zsh
+exec "@@EXEC_GPS_SIM_UI@@"

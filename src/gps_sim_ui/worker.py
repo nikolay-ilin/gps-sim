@@ -24,7 +24,10 @@ class SimulationWorker(QThread):
     """Обновляет настройки по точке и запускает конвейер симуляции."""
 
     log_line = Signal(str)
-    finished = Signal(int)
+    # Не называть finished — это переопределяет QThread.finished и ломает завершение потока в Qt.
+    run_finished = Signal(int)
+    # Сразу перед run_simulation (конвейер gps-sdr-sim → hackrf).
+    transmission_started = Signal()
 
     def __init__(self, lat: float, lng: float) -> None:
         super().__init__()
@@ -48,7 +51,7 @@ class SimulationWorker(QThread):
 
             if self._cancel.is_set():
                 self.log_line.emit("Остановлено до начала подготовки.\n")
-                self.finished.emit(130)
+                self.run_finished.emit(130)
                 return
 
             if not elevation_cache_valid(cfg, self._lat, self._lng):
@@ -57,7 +60,7 @@ class SimulationWorker(QThread):
 
             if self._cancel.is_set():
                 self.log_line.emit("Остановлено до загрузки эфемерид.\n")
-                self.finished.emit(130)
+                self.run_finished.emit(130)
                 return
 
             nasa_login = (cfg.get("nasa_login") or "").strip()
@@ -86,11 +89,19 @@ class SimulationWorker(QThread):
 
             if self._cancel.is_set():
                 self.log_line.emit("Остановлено до запуска передачи.\n")
-                self.finished.emit(130)
+                self.run_finished.emit(130)
                 return
 
+            self.log_line.emit("Начало трансляции.\n")
+            self.transmission_started.emit()
             rc = run_simulation(cfg, interactive=False, cancel_event=self._cancel)
-            self.finished.emit(rc)
+            if rc == 0:
+                self.log_line.emit("Конец трансляции: успех.\n")
+            elif rc == 130:
+                self.log_line.emit("Конец трансляции: остановка.\n")
+            else:
+                self.log_line.emit(f"Конец трансляции: код выхода {rc}.\n")
+            self.run_finished.emit(rc)
         except Exception as e:
             self.log_line.emit(f"Ошибка: {e}\n")
-            self.finished.emit(1)
+            self.run_finished.emit(1)

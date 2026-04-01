@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -169,6 +170,56 @@ def _short_filename(name: str, max_len: int = 26) -> str:
     return name[: max_len - 1] + "…"
 
 
+def _format_broadcast_elapsed(seconds: float) -> str:
+    """Длительность: чч:мм:сс при >= 1 ч, иначе мм:сс."""
+    total = int(max(0, seconds))
+    h = total // 3600
+    m = (total % 3600) // 60
+    s = total % 60
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+_ACTION_BTN_STYLE_IDLE = (
+    "QPushButton { background-color: #2e7d32; color: #ffffff; border: none; "
+    "border-radius: 6px; padding: 10px 20px; font-weight: 600; }"
+    "QPushButton:disabled { background-color: #81c784; color: #e8f5e9; }"
+)
+_ACTION_BTN_STYLE_PREP = (
+    "QPushButton { background-color: #ef6c00; color: #ffffff; border: none; "
+    "border-radius: 6px; padding: 10px 20px; font-weight: 600; }"
+)
+# Явные семейства: generic «monospace» в Qt даёт поиск несуществующего «Monospace» на macOS.
+_ACTION_BTN_STYLE_TX = (
+    "QPushButton { background-color: #c62828; color: #ffffff; border: none; "
+    "border-radius: 6px; padding: 10px 20px; font-weight: 600; "
+    "font-family: 'Menlo', 'Consolas', 'DejaVu Sans Mono', 'Courier New'; }"
+)
+
+# Фон как у панели бара (palette(window)); скругление требует непустого стиля кнопки.
+_EPHEM_BTN_STYLE = (
+    "QPushButton {"
+    "  border-radius: 4px;"
+    "  padding: 6px 10px;"
+    "  text-align: left;"
+    "  background-color: palette(window);"
+    "  color: #ffffff;"
+    "  border: none;"
+    "  outline: none;"
+    "}"
+    "QPushButton:hover {"
+    "  background-color: palette(light);"
+    "  color: #ffffff;"
+    "}"
+    "QPushButton:pressed { background-color: palette(mid); }"
+    "QPushButton:disabled {"
+    "  background-color: palette(window);"
+    "  color: #9e9e9e;"
+    "}"
+)
+
+
 def _safe_wait_thread(thread: QThread | None, ms: int) -> None:
     """Ожидание QThread без обращения к уже удалённому QObject (deleteLater)."""
     if thread is None:
@@ -199,6 +250,9 @@ class MainWindow(QMainWindow):
         self._brdc_user_initiated = False
         self._brdc_startup_scheduled = False
         self._fetch_seq = 0
+        self._tx_start_monotonic: float | None = None
+        self._broadcast_elapsed_timer: QTimer | None = None
+        self._show_logs_panel = bool(self._cfg.get("ui_show_logs_panel", False))
 
         self._view = QWebEngineView()
         s = self._view.settings()
@@ -214,11 +268,15 @@ class MainWindow(QMainWindow):
         html = MAP_HTML.format(lat=self._lat, lng=self._lng, zoom=13)
         self._view.setHtml(html)
 
-        self._action_btn = QPushButton("Start")
+        self._action_btn = QPushButton("Запуск")
+        sh = self._action_btn.sizeHint()
+        self._action_btn.setMinimumSize(max(96, sh.width() * 2), max(36, sh.height() * 2))
+        self._apply_action_button_style_idle()
         self._action_btn.clicked.connect(self._on_action)
 
         self._ephem_btn = QPushButton()
-        self._ephem_btn.setStyleSheet("QPushButton { border-radius: 4px; }")
+        self._ephem_btn.setStyleSheet(_EPHEM_BTN_STYLE)
+        self._ephem_btn.setMinimumWidth(200)
         self._ephem_btn.setToolTip("Обновить файл broadcast-эфемерид BRDC с CDDIS (принудительно)")
         self._ephem_btn.clicked.connect(self._on_ephem_clicked)
         self._refresh_ephem_button()
@@ -237,26 +295,57 @@ class MainWindow(QMainWindow):
         bar.addWidget(self._recenter_btn)
         bar.addWidget(self._hint_label, stretch=1)
         actions = QHBoxLayout()
+        actions.setSpacing(0)
         actions.addWidget(self._action_btn)
+        actions.addSpacing(12)
         actions.addWidget(self._ephem_btn)
+        actions.addSpacing(8)
+        self._toggle_logs_btn = QPushButton()
+        self._toggle_logs_btn.setFixedWidth(32)
+        self._toggle_logs_btn.setToolTip("Показать или скрыть панель журнала")
+        self._toggle_logs_btn.clicked.connect(self._on_toggle_logs_panel)
+        actions.addWidget(self._toggle_logs_btn)
         bar.addLayout(actions)
 
         self._log = QTextEdit()
         self._log.setReadOnly(True)
         self._log.setPlaceholderText("Здесь появится журнал запуска симуляции…")
-        self._log.setMinimumHeight(160)
+        self._log.setMinimumWidth(200)
 
-        central = QWidget()
-        lay = QVBoxLayout(central)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.addWidget(self._view, stretch=1)
-        bar_wrap = QWidget()
-        bar_l = QVBoxLayout(bar_wrap)
+        self._bar_wrap = QWidget()
+        bar_l = QVBoxLayout(self._bar_wrap)
         bar_l.setContentsMargins(8, 4, 8, 4)
         bar_l.addLayout(bar)
-        lay.addWidget(bar_wrap)
-        lay.addWidget(self._log)
+
+        self._left_panel = QWidget()
+        left_lay = QVBoxLayout(self._left_panel)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.addWidget(self._view, stretch=1)
+        left_lay.addWidget(self._bar_wrap)
+
+        central = QWidget()
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(self._left_panel, stretch=1)
+        root.addWidget(self._log, stretch=1)
         self.setCentralWidget(central)
+
+        self._apply_logs_panel_visibility()
+
+    def _apply_logs_panel_visibility(self) -> None:
+        self._log.setVisible(self._show_logs_panel)
+        self._toggle_logs_btn.setText("<" if self._show_logs_panel else ">")
+        self._toggle_logs_btn.setToolTip(
+            "Скрыть панель журнала" if self._show_logs_panel else "Показать панель журнала справа",
+        )
+
+    def _on_toggle_logs_panel(self) -> None:
+        self._show_logs_panel = not self._show_logs_panel
+        cfg = load_settings()
+        cfg["ui_show_logs_panel"] = self._show_logs_panel
+        save_settings(cfg)
+        self._cfg = cfg
+        self._apply_logs_panel_visibility()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -277,6 +366,37 @@ class MainWindow(QMainWindow):
         elev_busy = self._elev_thread is not None and self._elev_thread.isRunning()
         pending_ok = self._pending_lat is not None and self._pending_lng is not None
         self._action_btn.setEnabled(pending_ok and not brdc_busy and not elev_busy)
+
+    def _apply_action_button_style_idle(self) -> None:
+        self._action_btn.setStyleSheet(_ACTION_BTN_STYLE_IDLE)
+
+    def _apply_action_button_style_prep(self) -> None:
+        self._action_btn.setStyleSheet(_ACTION_BTN_STYLE_PREP)
+
+    def _apply_action_button_style_tx(self) -> None:
+        self._action_btn.setStyleSheet(_ACTION_BTN_STYLE_TX)
+
+    def _tick_broadcast_elapsed(self) -> None:
+        if self._tx_start_monotonic is None:
+            return
+        elapsed = time.monotonic() - self._tx_start_monotonic
+        self._action_btn.setText(_format_broadcast_elapsed(elapsed))
+
+    def _on_transmission_started(self) -> None:
+        self._set_map_click_blocked(True)
+        self._apply_action_button_style_tx()
+        self._tx_start_monotonic = time.monotonic()
+        if self._broadcast_elapsed_timer is None:
+            self._broadcast_elapsed_timer = QTimer(self)
+            self._broadcast_elapsed_timer.setInterval(1000)
+            self._broadcast_elapsed_timer.timeout.connect(self._tick_broadcast_elapsed)
+        self._broadcast_elapsed_timer.start()
+        self._tick_broadcast_elapsed()
+
+    def _stop_broadcast_elapsed_timer(self) -> None:
+        self._tx_start_monotonic = None
+        if self._broadcast_elapsed_timer is not None:
+            self._broadcast_elapsed_timer.stop()
 
     def _refresh_ephem_button(self) -> None:
         busy_worker = self._worker is not None and self._worker.isRunning()
@@ -454,10 +574,12 @@ class MainWindow(QMainWindow):
 
         self._log.clear()
         self._action_btn.setText("Stop")
+        self._apply_action_button_style_prep()
         self._action_btn.setEnabled(True)
         self._worker = SimulationWorker(self._pending_lat, self._pending_lng)
         self._worker.log_line.connect(self._append_log)
-        self._worker.finished.connect(self._on_worker_finished)
+        self._worker.transmission_started.connect(self._on_transmission_started)
+        self._worker.run_finished.connect(self._on_worker_finished)
         self._worker.start()
         self._refresh_ephem_button()
 
@@ -467,8 +589,14 @@ class MainWindow(QMainWindow):
         self._log.moveCursor(QTextCursor.MoveOperation.End)
 
     def _on_worker_finished(self, _code: int) -> None:
+        w = self._worker
         self._worker = None
+        if w is not None:
+            w.wait()
+        self._stop_broadcast_elapsed_timer()
+        self._set_map_click_blocked(False)
         self._action_btn.setText("Start")
+        self._apply_action_button_style_idle()
         self._cfg = load_settings()
         self._lat, self._lng = _default_lat_lng(self._cfg)
         if self._pending_lat is not None and self._pending_lng is not None:
@@ -485,6 +613,8 @@ class MainWindow(QMainWindow):
         self._refresh_ephem_button()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._stop_broadcast_elapsed_timer()
+        self._set_map_click_blocked(False)
         if self._worker is not None and self._worker.isRunning():
             self._worker.request_stop()
             self._worker.wait(300_000)

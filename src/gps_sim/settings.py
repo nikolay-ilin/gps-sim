@@ -16,6 +16,7 @@ DEFAULT_HACKRF_FREQ_HZ = 1_575_420_000
 DEFAULT_HACKRF_TX_GAIN = 47
 DEFAULT_HACKRF_AMP = 1
 
+# UI: ui_show_logs_panel — bool, показывать ли панель журнала справа (50% ширины).
 
 def settings_path() -> Path:
     """Путь к файлу настроек. Переменная GPS_SIM_SETTINGS — полный путь к JSON (для тестов)."""
