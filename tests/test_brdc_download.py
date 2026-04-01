@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from gps_sim.brdc_download import find_latest_brdc_gz_filename, gunzip_file
+from gps_sim import brdc_download as brdc_download_mod
+from gps_sim.brdc_download import (
+    find_latest_brdc_gz_filename,
+    gunzip_file,
+    verify_earthdata_credentials,
+)
 
 
 def test_find_latest_brdc_gz_filename_2026() -> None:
@@ -22,6 +27,21 @@ def test_find_latest_brdc_gz_filename_2025() -> None:
 def test_find_latest_empty_raises() -> None:
     with pytest.raises(RuntimeError, match="Не удалось найти"):
         find_latest_brdc_gz_filename("<html></html>", 2026)
+
+
+def test_verify_earthdata_credentials_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run_curl(
+        _url: str,
+        _netrc_file: Path,
+        _cookie_file: Path,
+        *,
+        output_file: Path | None = None,
+    ) -> str:
+        assert output_file is None
+        return '<a href="brdc0100.26n.gz">x</a>'
+
+    monkeypatch.setattr(brdc_download_mod, "_run_curl", fake_run_curl)
+    verify_earthdata_credentials("user", "secret", year=2026)
 
 
 def test_gunzip_roundtrip(tmp_path: Path) -> None:

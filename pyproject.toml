@@ -19,19 +19,21 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
 ]
+ui = [
+    "PySide6>=6.5.0",
+]
 
 [project.scripts]
 gps-sim = "gps_sim.cli:main"
 gps-sim-run = "gps_sim.run_sim:main"
+gps-sim-ui = "gps_sim_ui.main:main"
 
 [tool.hatch.build]
 sources = ["src"]
 
 [tool.hatch.build.targets.wheel]
-force-include = {
-  "src/gps_sim/bin/gps-sdr-sim-macos-apple" = "gps_sim/bin/gps-sdr-sim-macos-apple",
-  "src/gps_sim/bin/gps-sdr-sim-debian-arm64" = "gps_sim/bin/gps-sdr-sim-debian-arm64",
-}
+packages = ["src/gps_sim", "src/gps_sim_ui"]
+force-include = { "src/gps_sim/bin/gps-sdr-sim-macos-apple" = "gps_sim/bin/gps-sdr-sim-macos-apple", "src/gps_sim/bin/gps-sdr-sim-debian-arm64" = "gps_sim/bin/gps-sdr-sim-debian-arm64" }
 
 [tool.ruff]
 line-length = 100
@@ -43,7 +45,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.10"
 strict = true
-packages = ["gps_sim"]
+packages = ["gps_sim", "gps_sim_ui"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

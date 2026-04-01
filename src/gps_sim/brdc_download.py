@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -95,6 +96,26 @@ def _write_netrc(tmpdir: Path, login: str, password: str) -> Path:
     )
     os.chmod(netrc_path, 0o600)
     return netrc_path
+
+
+def verify_earthdata_credentials(
+    login: str,
+    password: str,
+    *,
+    year: int | None = None,
+) -> None:
+    """
+    Проверяет логин/пароль Earthdata: запрос каталога CDDIS и разбор списка brdc*.yyN.gz.
+    Полный файл не скачивается.
+    """
+    y = year if year is not None else datetime.now().year
+    base_url = brdc_catalog_url(y)
+    with tempfile.TemporaryDirectory(prefix="gps_sim_earthdata_") as tmp:
+        tmpdir = Path(tmp)
+        netrc_file = _write_netrc(tmpdir, login, password)
+        cookie_file = tmpdir / "cookies.txt"
+        html = _run_curl(base_url, netrc_file, cookie_file)
+        find_latest_brdc_gz_filename(html, y)
 
 
 def gunzip_file(gz_path: Path) -> Path:
