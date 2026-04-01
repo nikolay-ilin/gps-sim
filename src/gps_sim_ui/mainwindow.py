@@ -50,20 +50,35 @@ MAP_HTML = """<!DOCTYPE html>
   <script>
     var mapClickBlocked = false;
     var map = L.map('map').setView([{lat}, {lng}], {zoom});
-    var esriAttr =
-      'Спутник: Esri, Maxar, Earthstar Geographics &mdash; '
-      'подписи и объекты: Esri, Garmin, OpenStreetMap';
+    var mapAttr =
+      'Спутник: Esri, Maxar &mdash; '
+      'административные подписи: Esri, Garmin, OSM &mdash; '
+      'заведения и организации (POI): © OpenStreetMap, © CARTO';
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
-      {{ maxZoom: 19, attribution: esriAttr }}
+      {{ maxZoom: 19, attribution: mapAttr }}
     ).addTo(map);
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{{z}}/{{y}}/{{x}}',
-      {{ maxZoom: 19, opacity: 1 }}
+      {{ maxZoom: 19, opacity: 1, attribution: '' }}
+    ).addTo(map);
+    L.tileLayer(
+      'https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}.png',
+      {{
+        subdomains: 'abcd',
+        maxZoom: 19,
+        opacity: 0.38,
+        attribution: '',
+      }}
     ).addTo(map);
     var marker = L.marker([{lat}, {lng}]).addTo(map);
     window.__setMapClickBlocked = function(blocked) {{
       mapClickBlocked = !!blocked;
+    }};
+    window.__flyToSelection = function(lat, lng) {{
+      var z = map.getZoom();
+      map.setView([lat, lng], z);
+      marker.setLatLng([lat, lng]);
     }};
     new QWebChannel(qt.webChannelTransport, function(channel) {{
       var bridge = channel.objects.bridge;
@@ -182,9 +197,16 @@ class MainWindow(QMainWindow):
 
         self._hint_label = QLabel()
         self._hint_label.setWordWrap(True)
+
+        self._recenter_btn = QPushButton("⌖")
+        self._recenter_btn.setToolTip("Перейти к выбранным координатам")
+        self._recenter_btn.setFixedWidth(36)
+        self._recenter_btn.clicked.connect(self._on_recenter_map)
+
         self._refresh_hint_initial()
 
         bar = QHBoxLayout()
+        bar.addWidget(self._recenter_btn)
         bar.addWidget(self._hint_label, stretch=1)
         bar.addWidget(self._action_btn)
 
@@ -218,22 +240,38 @@ class MainWindow(QMainWindow):
             return
         self._set_map_click_blocked(False)
 
+    def _update_recenter_button_state(self) -> None:
+        ok = self._pending_lat is not None and self._pending_lng is not None
+        self._recenter_btn.setEnabled(ok)
+
+    def _on_recenter_map(self) -> None:
+        if self._pending_lat is None or self._pending_lng is None:
+            return
+        la, ln = self._pending_lat, self._pending_lng
+        self._view.page().runJavaScript(
+            "if (typeof window.__flyToSelection === 'function') { "
+            f"window.__flyToSelection({la}, {ln}); "
+            "}",
+        )
+
     def _refresh_hint_initial(self) -> None:
         cfg = self._cfg
         if not _has_saved_coordinates(cfg):
             self._hint_label.setText("Нажми на карту для выбора точки")
-            return
-        lat = float(cfg["lat"])
-        lng = float(cfg["lng"])
-        em = cfg.get("elevation_m")
-        if em is not None:
-            self._hint_label.setText(_hint_text_coords_elevation(lat, lng, float(em)))
         else:
-            self._hint_label.setText(f"{lat:.6f}, {lng:.6f}\nвысота: —")
+            lat = float(cfg["lat"])
+            lng = float(cfg["lng"])
+            em = cfg.get("elevation_m")
+            if em is not None:
+                self._hint_label.setText(_hint_text_coords_elevation(lat, lng, float(em)))
+            else:
+                self._hint_label.setText(f"{lat:.6f}, {lng:.6f}\nвысота: —")
+        self._update_recenter_button_state()
 
     def _on_map_click(self, lat: float, lng: float) -> None:
         self._pending_lat = lat
         self._pending_lng = lng
+        self._update_recenter_button_state()
         self._fetch_seq += 1
         seq = self._fetch_seq
 
@@ -316,6 +354,7 @@ class MainWindow(QMainWindow):
                 self._refresh_hint_initial()
         else:
             self._refresh_hint_initial()
+        self._update_recenter_button_state()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._worker is not None and self._worker.isRunning():
