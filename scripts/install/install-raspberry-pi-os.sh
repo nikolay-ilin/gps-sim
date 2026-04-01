@@ -24,8 +24,8 @@ fi
 ensure_venv_and_install "$REPO" "[dev,ui]"
 
 EXEC_UI=$(exec_gps_sim_ui_unix "$REPO")
-T_DESKTOP="$REPO/docs/templates/gps-sim-ui.desktop.template"
-T_AUTOSTART="$REPO/docs/templates/gps-sim-ui-autostart.desktop.template"
+T_DESKTOP="$SCRIPT_DIR/templates/gps-sim-ui.desktop.template"
+T_AUTOSTART="$SCRIPT_DIR/templates/gps-sim-ui-autostart.desktop.template"
 
 APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
@@ -34,7 +34,25 @@ mkdir -p "$APP_DIR" "$AUTOSTART_DIR"
 if [ -f "$T_DESKTOP" ]; then
 	render_desktop_template "$T_DESKTOP" "$APP_DIR/gps-sim-ui.desktop" "$EXEC_UI"
 	chmod 644 "$APP_DIR/gps-sim-ui.desktop"
-	echo "Создан ярлык меню: $APP_DIR/gps-sim-ui.desktop"
+	echo "Создан пункт меню приложений: $APP_DIR/gps-sim-ui.desktop"
+fi
+
+# Иконка на рабочем столе (не путать с меню приложений)
+DESKTOP_DIR=""
+if command -v xdg-user-dir >/dev/null 2>&1; then
+	DESKTOP_DIR=$(xdg-user-dir DESKTOP 2>/dev/null || true)
+fi
+if [ -z "$DESKTOP_DIR" ] || [ ! -d "$DESKTOP_DIR" ]; then
+	DESKTOP_DIR="$HOME/Desktop"
+fi
+mkdir -p "$DESKTOP_DIR"
+if [ -f "$T_DESKTOP" ]; then
+	render_desktop_template "$T_DESKTOP" "$DESKTOP_DIR/gps-sim-ui.desktop" "$EXEC_UI"
+	chmod +x "$DESKTOP_DIR/gps-sim-ui.desktop"
+	if command -v gio >/dev/null 2>&1; then
+		gio set "$DESKTOP_DIR/gps-sim-ui.desktop" metadata::trusted true 2>/dev/null || true
+	fi
+	echo "Создан ярлык на рабочем столе: $DESKTOP_DIR/gps-sim-ui.desktop"
 fi
 
 if [ -f "$T_AUTOSTART" ]; then

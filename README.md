@@ -71,7 +71,7 @@ pip install -e ".[dev,ui]"
    python3 -c "import pathlib; print((pathlib.Path('.venv') / 'bin' / 'gps-sim-ui').resolve())"
    ```
 
-2. **Вариант A — скрипт `.command`:** в репозитории есть шаблон `docs/templates/run-gps-sim-ui-macos.sh.template`. Скопируйте его, замените плейсхолдер `@@EXEC_GPS_SIM_UI@@` на путь из шага 1, сохраните файл с расширением `.command`, выполните `chmod +x файл.command`. Двойной щелчок в Finder запустит UI; ярлык можно перетащить в Dock.
+2. **Вариант A — скрипт `.command`:** в репозитории есть шаблон `scripts/install/templates/run-gps-sim-ui-macos.sh.template`. Скопируйте его, замените плейсхолдер `@@EXEC_GPS_SIM_UI@@` на путь из шага 1, сохраните файл с расширением `.command`, выполните `chmod +x файл.command`. Двойной щелчок в Finder запустит UI; ярлык можно перетащить в Dock.
 
 3. **Вариант B — Automator:** приложение «Automator» → тип «Программа» → действие «Запустить shell-скрипт», оболочка `/bin/zsh`, в теле одна строка: `exec "/полный/путь/к/.venv/bin/gps-sim-ui"`. Сохраните как `gps-sim-ui.app` в каталог «Программы». При блокировке Gatekeeper разрешите запуск в «Системные настройки → Конфиденциальность и безопасность».
 
@@ -129,15 +129,40 @@ pip install -e ".[dev,ui]"
 
 **Создание ярлыка для запуска**
 
-1. Полный путь к `gps-sim-ui`:
+Файл в каталоге **`~/.local/share/applications/`** добавляет программу в **меню приложений** (лупа / кнопка «Пуск»), но **не создаёт значок на рабочем столе**. Чтобы значок появился на столе, нужен отдельный `.desktop` в каталоге рабочего стола.
+
+1. Полный путь к `gps-sim-ui` (выполните в каталоге репозитория):
 
    ```bash
    python3 -c "import pathlib; print((pathlib.Path('.venv') / 'bin' / 'gps-sim-ui').resolve())"
    ```
 
-2. Создайте каталог меню приложений и файл ярлыка, подставив путь вместо плейсхолдера. Образец содержимого — файл **`docs/templates/gps-sim-ui.desktop.template`** в репозитории: скопируйте его в `~/.local/share/applications/gps-sim-ui.desktop` и замените строку `Exec=@@EXEC_GPS_SIM_UI@@` на `Exec=/полный/путь/к/.venv/bin/gps-sim-ui`.
+2. Шаблон: **`scripts/install/templates/gps-sim-ui.desktop.template`**. Скопируйте его, подставьте в `Exec=` путь из шага 1 вместо `@@EXEC_GPS_SIM_UI@@`.
 
-3. При необходимости выполните `update-desktop-database ~/.local/share/applications`.
+3. **Меню приложений:** сохраните копию как `~/.local/share/applications/gps-sim-ui.desktop`, затем при необходимости:
+
+   ```bash
+   update-desktop-database ~/.local/share/applications
+   ```
+
+4. **Рабочий стол (значок на столе):** из **корня репозитория** можно собрать ярлык одной цепочкой команд (подставляется путь к `gps-sim-ui` из venv):
+
+   ```bash
+   cd /путь/к/gps-sim
+   EXEC_UI=$(python3 -c "import pathlib; print((pathlib.Path('.venv') / 'bin' / 'gps-sim-ui').resolve())")
+   DESKTOP=$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")
+   mkdir -p "$DESKTOP"
+   sed "s|@@EXEC_GPS_SIM_UI@@|$EXEC_UI|g" scripts/install/templates/gps-sim-ui.desktop.template >"$DESKTOP/gps-sim-ui.desktop"
+   chmod +x "$DESKTOP/gps-sim-ui.desktop"
+   ```
+
+   На Raspberry Pi OS и в других средах с файловым менеджером на базе GTK можно пометить ярлык доверенным (иначе при первом запуске возможен запрет):
+
+   ```bash
+   gio set "$DESKTOP/gps-sim-ui.desktop" metadata::trusted true
+   ```
+
+   Если команды `gio` нет или значок всё ещё не запускается двойным щелчком: правый щелчок по значку → «Свойства» / «Разрешить запуск» / «Execute» (формулировка зависит от версии оболочки).
 
 **Автозагрузка графического приложения**
 
@@ -149,7 +174,7 @@ pip install -e ".[dev,ui]"
    mkdir -p ~/.config/autostart
    ```
 
-2. Поместите туда файл `~/.config/autostart/gps-sim-ui.desktop`. Шаблон: **`docs/templates/gps-sim-ui-autostart.desktop.template`** — скопируйте и подставьте тот же путь в `Exec=`, что и для ярлыка.
+2. Поместите туда файл `~/.config/autostart/gps-sim-ui.desktop`. Шаблон: **`scripts/install/templates/gps-sim-ui-autostart.desktop.template`** — скопируйте и подставьте тот же путь в `Exec=`, что и для ярлыка.
 
 3. Чтобы отключить автозапуск, удалите или переименуйте этот `.desktop`.
 
@@ -209,7 +234,7 @@ pip install -e ".[dev,ui]"
 
 2. В проводнике откройте `.venv\Scripts\`, правый щелчок по `gps-sim-ui.exe` → «Отправить» → «Рабочий стол (создать ярлык)».
 
-3. Для создания ярлыка скриптом в репозитории есть **`docs/templates/gps-sim-ui-windows-shortcut.vbs.template`**: скопируйте файл, подставьте в текст пути к `gps-sim-ui.exe` и к каталогу проекта вместо `@@EXEC_GPS_SIM_UI@@` и `@@WORKING_DIR@@`, сохраните как `.vbs` и выполните: `cscript //nologo имя.vbs`.
+3. Для создания ярлыка скриптом в репозитории есть **`scripts/install/templates/gps-sim-ui-windows-shortcut.vbs.template`**: скопируйте файл, подставьте в текст пути к `gps-sim-ui.exe` и к каталогу проекта вместо `@@EXEC_GPS_SIM_UI@@` и `@@WORKING_DIR@@`, сохраните как `.vbs` и выполните: `cscript //nologo имя.vbs`.
 
 **Автоматическая установка**
 
@@ -260,15 +285,17 @@ pip install -e ".[dev,ui]"
 
 **Создание ярлыка для запуска**
 
+Как и на Raspberry Pi: запись в **`~/.local/share/applications/`** даёт пункт в **меню**, а не на столе. Шаблон: **`scripts/install/templates/gps-sim-ui.desktop.template`**.
+
 1. Путь к UI:
 
    ```bash
    python3 -c "import pathlib; print((pathlib.Path('.venv') / 'bin' / 'gps-sim-ui').resolve())"
    ```
 
-2. Файл `~/.local/share/applications/gps-sim-ui.desktop` создайте по образцу **`docs/templates/gps-sim-ui.desktop.template`**: замените `@@EXEC_GPS_SIM_UI@@` на полный путь к `gps-sim-ui` из шага 1.
+2. Создайте `~/.local/share/applications/gps-sim-ui.desktop` с подставленным `Exec=`, при необходимости `update-desktop-database ~/.local/share/applications`.
 
-3. Выполните `update-desktop-database ~/.local/share/applications` при необходимости.
+3. Для **значка на рабочем столе** скопируйте тот же `.desktop` в каталог `$(xdg-user-dir DESKTOP 2>/dev/null || echo "$HOME/Desktop")`, выполните `chmod +x` на файле; при первом запуске может понадобиться `gio set "$HOME/Desktop/gps-sim-ui.desktop" metadata::trusted true` или разрешение запуска через контекстное меню значка.
 
 **Автоматическая установка**
 
@@ -283,8 +310,8 @@ chmod +x scripts/install/install-ubuntu.sh
 
 В репозитории:
 
-- **`docs/templates/`** — файлы-шаблоны ярлыков и автозапуска с плейсхолдером `@@EXEC_GPS_SIM_UI@@`; описание плейсхолдеров — в `docs/templates/README.md`.
-- **`scripts/install/`** — готовые установщики для каждой ОС (venv, `pip install -e ".[dev,ui]"`, копирование шаблонов). Подробности — в `scripts/install/README.md`.
+- **`scripts/install/templates/`** — шаблоны ярлыков (`.desktop`, `.vbs`, macOS shell) с плейсхолдером `@@EXEC_GPS_SIM_UI@@` (и при необходимости `@@WORKING_DIR@@` в VBS).
+- **`scripts/install/`** — установщики для каждой ОС (venv, `pip install -e ".[dev,ui]"`, копирование шаблонов; на Linux дополнительно ярлык на **рабочем столе** и пункт меню). Подробности — в `scripts/install/README.md`.
 
 Переменная окружения **`REPO_ROOT`** задаёт каталог проекта, если скрипт запускают не из клона по умолчанию.
 
