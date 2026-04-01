@@ -2,6 +2,7 @@ import io
 import json
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -59,7 +60,7 @@ def test_main_succeeds_with_mock_pipeline(tmp_path, monkeypatch) -> None:
     }
     monkeypatch.setattr(run_sim, "load_settings", lambda: cfg)
     monkeypatch.setattr(run_sim, "_find_hackrf_transfer", lambda: "/usr/bin/hackrf_transfer")
-    monkeypatch.setattr(run_sim, "run_pipeline", lambda _g, _h: 0)
+    monkeypatch.setattr(run_sim, "run_pipeline", lambda *_a, **_k: 0)
 
     run_sim.main([])
 
@@ -93,7 +94,7 @@ def test_run_pipeline_success(monkeypatch) -> None:
         def __init__(self, *args: object, **kwargs: object) -> None:
             pass
 
-        def wait(self) -> int:
+        def wait(self, timeout: float | None = None) -> int:
             return 0
 
         def poll(self) -> int | None:
@@ -109,7 +110,7 @@ def test_run_pipeline_success(monkeypatch) -> None:
         def __init__(self, *args: object, **kwargs: object) -> None:
             pass
 
-        def wait(self) -> int:
+        def wait(self, timeout: float | None = None) -> int:
             return 0
 
         def poll(self) -> int | None:
@@ -142,7 +143,7 @@ def test_run_pipeline_nonzero_return(monkeypatch) -> None:
         def __init__(self, *args: object, **kwargs: object) -> None:
             pass
 
-        def wait(self) -> int:
+        def wait(self, timeout: float | None = None) -> int:
             return 1
 
         def poll(self) -> int | None:
@@ -158,7 +159,7 @@ def test_run_pipeline_nonzero_return(monkeypatch) -> None:
         def __init__(self, *args: object, **kwargs: object) -> None:
             pass
 
-        def wait(self) -> int:
+        def wait(self, timeout: float | None = None) -> int:
             return 0
 
         def poll(self) -> int | None:
@@ -178,6 +179,62 @@ def test_run_pipeline_nonzero_return(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     assert run_sim.run_pipeline(["true"], ["true"]) == 1
+
+
+def test_merge_pipeline_exit_codes_prefers_hackrf_on_sigpipe() -> None:
+    assert run_sim._merge_pipeline_exit_codes(-13, 1) == 1
+    assert run_sim._merge_pipeline_exit_codes(2, -13) == 2
+    assert run_sim._merge_pipeline_exit_codes(-13, 0) == -13
+
+
+def test_run_pipeline_cancel_returns_130(monkeypatch) -> None:
+    class _Pipe:
+        def close(self) -> None:
+            pass
+
+    class P1:
+        stdout = _Pipe()
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+        def poll(self) -> int | None:
+            return 0
+
+        def terminate(self) -> None:
+            pass
+
+        def kill(self) -> None:
+            pass
+
+    class P2:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+        def poll(self) -> int | None:
+            return None
+
+        def terminate(self) -> None:
+            pass
+
+        def kill(self) -> None:
+            pass
+
+    seq = iter([P1(), P2()])
+
+    def fake_popen(*_a: object, **_k: object) -> object:
+        return next(seq)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    cancel = threading.Event()
+    cancel.set()
+    assert run_sim.run_pipeline(["true"], ["true"], cancel_event=cancel) == 130
 
 
 def test_bundled_filename_apple_silicon(monkeypatch) -> None:

@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QCloseEvent, QTextCursor
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -114,6 +114,19 @@ def _default_lat_lng(cfg: dict[str, Any]) -> tuple[float, float]:
     return 55.751244, 37.618423
 
 
+def _has_saved_coordinates(cfg: dict[str, Any]) -> bool:
+    lat = cfg.get("lat")
+    lng = cfg.get("lng")
+    if lat is None or lng is None:
+        return False
+    try:
+        float(lat)
+        float(lng)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -124,6 +137,9 @@ class MainWindow(QMainWindow):
         self._lat, self._lng = _default_lat_lng(self._cfg)
         self._pending_lat: float | None = None
         self._pending_lng: float | None = None
+        if _has_saved_coordinates(self._cfg):
+            self._pending_lat = self._lat
+            self._pending_lng = self._lng
         self._worker: SimulationWorker | None = None
 
         self._view = QWebEngineView()
@@ -140,15 +156,18 @@ class MainWindow(QMainWindow):
         html = MAP_HTML.format(lat=self._lat, lng=self._lng, zoom=13)
         self._view.setHtml(html)
 
-        self._run_btn = QPushButton("Run")
-        self._run_btn.setEnabled(False)
-        self._run_btn.clicked.connect(self._on_run)
+        self._action_btn = QPushButton("Start")
+        self._action_btn.setEnabled(self._pending_lat is not None and self._pending_lng is not None)
+        self._action_btn.clicked.connect(self._on_action)
 
-        hint = QLabel("Кликните по карте, чтобы выбрать точку, затем нажмите Run.")
+        hint = QLabel(
+            "Нажмите Start с сохранёнными координатами или кликните по карте, чтобы выбрать точку.",
+        )
+        hint.setWordWrap(True)
         bar = QHBoxLayout()
         bar.addWidget(hint)
         bar.addStretch()
-        bar.addWidget(self._run_btn)
+        bar.addWidget(self._action_btn)
 
         self._log = QTextEdit()
         self._log.setReadOnly(True)
@@ -170,16 +189,20 @@ class MainWindow(QMainWindow):
     def _on_map_click(self, lat: float, lng: float) -> None:
         self._pending_lat = lat
         self._pending_lng = lng
-        self._run_btn.setEnabled(True)
+        if self._worker is None or not self._worker.isRunning():
+            self._action_btn.setText("Start")
+            self._action_btn.setEnabled(True)
 
-    def _on_run(self) -> None:
-        if self._pending_lat is None or self._pending_lng is None:
-            return
+    def _on_action(self) -> None:
         if self._worker is not None and self._worker.isRunning():
+            self._worker.request_stop()
+            return
+        if self._pending_lat is None or self._pending_lng is None:
             return
 
         self._log.clear()
-        self._run_btn.setEnabled(False)
+        self._action_btn.setText("Stop")
+        self._action_btn.setEnabled(True)
         self._worker = SimulationWorker(self._pending_lat, self._pending_lng)
         self._worker.log_line.connect(self._append_log)
         self._worker.finished.connect(self._on_worker_finished)
@@ -191,7 +214,15 @@ class MainWindow(QMainWindow):
         self._log.moveCursor(QTextCursor.MoveOperation.End)
 
     def _on_worker_finished(self, _code: int) -> None:
-        self._run_btn.setEnabled(True)
         self._worker = None
+        self._action_btn.setText("Start")
+        self._action_btn.setEnabled(self._pending_lat is not None and self._pending_lng is not None)
         self._cfg = load_settings()
         self._lat, self._lng = _default_lat_lng(self._cfg)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.request_stop()
+            self._worker.wait(300_000)
+        self._worker = None
+        event.accept()

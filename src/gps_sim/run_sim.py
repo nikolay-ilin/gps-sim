@@ -8,6 +8,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -163,8 +164,70 @@ def _location_string(cfg: dict[str, Any]) -> str:
     return f"{float(lat)},{float(lng)},{alt}"
 
 
-def run_pipeline(gps_cmd: list[str], hackrf_cmd: list[str]) -> int:
-    """Запускает конвейер; возвращает код выхода (0 — успех)."""
+def _terminate_pipeline_processes(
+    p1: subprocess.Popen[bytes] | None,
+    p2: subprocess.Popen[bytes] | None,
+) -> None:
+    for p in (p2, p1):
+        if p is not None and p.poll() is None:
+            p.terminate()
+    for p in (p2, p1):
+        if p is not None:
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+
+
+def _merge_pipeline_exit_codes(rc1: int, rc2: int) -> int:
+    """
+    Сводит коды gps-sdr-sim (p1) и hackrf_transfer (p2).
+
+    SIGPIPE (-13) у отправителя часто следует за ошибкой приёмника: тогда важнее код hackrf.
+    """
+    if rc1 == -13 and rc2 != 0:
+        return rc2
+    if rc2 == -13 and rc1 != 0:
+        return rc1
+    if rc1 != 0 or rc2 != 0:
+        return rc1 if rc1 != 0 else rc2
+    return 0
+
+
+def _warn_sigpipe_if_needed(rc1: int, rc2: int) -> None:
+    if rc1 != -13 and rc2 != -13:
+        return
+    print(
+        "Примечание: SIGPIPE (-13) — разрыв потока между gps-sdr-sim и hackrf_transfer. "
+        "Часто hackrf_transfer уже вышел с ошибкой (устройство, USB, права). "
+        "Смотрите вывод hackrf_transfer выше; проверьте HackRF и кабель.",
+        file=sys.stderr,
+    )
+
+
+def _wait_process_or_cancel(
+    proc: subprocess.Popen[bytes],
+    cancel_event: threading.Event,
+) -> int | None:
+    """Ждёт завершения процесса; при cancel_event возвращает None."""
+    while proc.poll() is None:
+        if cancel_event.is_set():
+            return None
+        try:
+            proc.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            continue
+    rc = proc.returncode
+    return 0 if rc is None else rc
+
+
+def run_pipeline(
+    gps_cmd: list[str],
+    hackrf_cmd: list[str],
+    *,
+    cancel_event: threading.Event | None = None,
+) -> int:
+    """Запускает конвейер; возвращает код выхода (0 — успех, 130 — остановка)."""
     p1: subprocess.Popen[bytes] | None = None
     p2: subprocess.Popen[bytes] | None = None
     try:
@@ -181,11 +244,25 @@ def run_pipeline(gps_cmd: list[str], hackrf_cmd: list[str]) -> int:
             raise
         if p1.stdout is not None:
             p1.stdout.close()
-        rc2 = p2.wait()
-        rc1 = p1.wait()
-        if rc1 != 0 or rc2 != 0:
-            return rc1 if rc1 != 0 else rc2
-        return 0
+        if cancel_event is None:
+            rc2 = p2.wait()
+            rc1 = p1.wait()
+        else:
+            r2 = _wait_process_or_cancel(p2, cancel_event)
+            if r2 is None:
+                print("\n[*] Остановка симуляции...", file=sys.stderr)
+                _terminate_pipeline_processes(p1, p2)
+                return 130
+            r1 = _wait_process_or_cancel(p1, cancel_event)
+            if r1 is None:
+                print("\n[*] Остановка симуляции...", file=sys.stderr)
+                _terminate_pipeline_processes(p1, p2)
+                return 130
+            rc2, rc1 = r2, r1
+        merged = _merge_pipeline_exit_codes(rc1, rc2)
+        if merged != 0:
+            _warn_sigpipe_if_needed(rc1, rc2)
+        return merged
     except FileNotFoundError as e:
         if p1 is not None and p1.poll() is None:
             p1.terminate()
@@ -193,15 +270,7 @@ def run_pipeline(gps_cmd: list[str], hackrf_cmd: list[str]) -> int:
         return 127
     except KeyboardInterrupt:
         print("\n[*] Остановка симуляции...", file=sys.stderr)
-        for p in (p2, p1):
-            if p is not None and p.poll() is None:
-                p.terminate()
-        for p in (p2, p1):
-            if p is not None:
-                try:
-                    p.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    p.kill()
+        _terminate_pipeline_processes(p1, p2)
         return 130
 
 
@@ -234,6 +303,7 @@ def run_simulation(
     duration_minutes: int | None = None,
     gain: int | None = None,
     interactive: bool = True,
+    cancel_event: threading.Event | None = None,
 ) -> int:
     """Конвейер gps-sdr-sim → hackrf_transfer по настройкам; возвращает код выхода."""
     if _find_hackrf_transfer() is None:
@@ -319,7 +389,7 @@ def run_simulation(
         "-x",
         str(gain_val),
     ]
-    return run_pipeline(gps_cmd, hackrf_cmd)
+    return run_pipeline(gps_cmd, hackrf_cmd, cancel_event=cancel_event)
 
 
 def main(argv: list[str] | None = None) -> None:

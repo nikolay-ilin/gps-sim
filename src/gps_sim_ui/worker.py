@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import threading
 from datetime import datetime
 
 from PySide6.QtCore import QThread, Signal
@@ -29,6 +30,12 @@ class SimulationWorker(QThread):
         super().__init__()
         self._lat = lat
         self._lng = lng
+        self._cancel = threading.Event()
+
+    def request_stop(self) -> None:
+        """Остановка подготовки или передачи (gps-sdr-sim → HackRF)."""
+        self._cancel.set()
+        self.requestInterruption()
 
     def run(self) -> None:
         try:
@@ -39,11 +46,21 @@ class SimulationWorker(QThread):
             cfg["duration_minutes"] = duration
             save_settings(cfg)
 
+            if self._cancel.is_set():
+                self.log_line.emit("Остановлено до начала подготовки.\n")
+                self.finished.emit(130)
+                return
+
             self.log_line.emit("Получение высоты по координатам…\n")
             elev = fetch_elevation(self._lat, self._lng)
             cfg["elevation_m"] = elev
             save_settings(cfg)
             self.log_line.emit(f"Высота: {elev:.2f} м\n")
+
+            if self._cancel.is_set():
+                self.log_line.emit("Остановлено до загрузки эфемерид.\n")
+                self.finished.emit(130)
+                return
 
             nasa_login = (cfg.get("nasa_login") or "").strip()
             nasa_pass = (cfg.get("nasa_pass") or "").strip()
@@ -60,13 +77,12 @@ class SimulationWorker(QThread):
             save_settings(cfg)
             self.log_line.emit(buf_dl.getvalue())
 
-            self.log_line.emit("Запуск симуляции (gps-sdr-sim → HackRF)…\n")
-            buf_run = io.StringIO()
-            with contextlib.redirect_stdout(buf_run), contextlib.redirect_stderr(buf_run):
-                rc = run_simulation(cfg, interactive=False)
-            self.log_line.emit(buf_run.getvalue())
-            if rc != 0:
-                self.log_line.emit(f"Код выхода: {rc}\n")
+            if self._cancel.is_set():
+                self.log_line.emit("Остановлено до запуска передачи.\n")
+                self.finished.emit(130)
+                return
+
+            rc = run_simulation(cfg, interactive=False, cancel_event=self._cancel)
             self.finished.emit(rc)
         except Exception as e:
             self.log_line.emit(f"Ошибка: {e}\n")
