@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gps-sim"
-version = "0.1.0"
-description = "Заготовка проекта для работы с GPS/GNSS"
+version = "1.0.0"
+description = "GPS simulation for HackRF One"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -22,6 +22,7 @@ dev = [
 
 [project.scripts]
 gps-sim = "gps_sim.cli:main"
+gps-sim-run = "gps_sim.run_sim:main"
 
 [tool.hatch.build]
 sources = ["src"]

@@ -27,7 +27,7 @@ def test_main_noninteractive_uses_saved_coords(tmp_path, monkeypatch) -> None:
     path.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
 
-    cli.main(["--skip-ephemeris", "--skip-elevation"])
+    cli.main(["--skip-ephemeris", "--skip-elevation", "--skip-run"])
 
     out = json.loads(path.read_text(encoding="utf-8"))
     assert out["lat"] == 55.75
@@ -52,7 +52,7 @@ def test_main_saves_elevation_m(tmp_path, monkeypatch) -> None:
         return 123.45
 
     monkeypatch.setattr(cli, "fetch_elevation", fake_fetch)
-    cli.main(["--skip-ephemeris"])
+    cli.main(["--skip-ephemeris", "--skip-run"])
 
     out = json.loads(path.read_text(encoding="utf-8"))
     assert out["elevation_m"] == pytest.approx(123.45)
@@ -70,7 +70,7 @@ def test_main_cli_coords_override(tmp_path, monkeypatch) -> None:
     path.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
 
-    cli.main(["59.93", "30.33", "--skip-ephemeris", "--skip-elevation"])
+    cli.main(["59.93", "30.33", "--skip-ephemeris", "--skip-elevation", "--skip-run"])
 
     out = json.loads(path.read_text(encoding="utf-8"))
     assert out["lat"] == pytest.approx(59.93)
@@ -84,7 +84,7 @@ def test_main_noninteractive_fails_without_creds(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
 
     with pytest.raises(SystemExit) as exc:
-        cli.main(["--skip-ephemeris", "--skip-elevation"])
+        cli.main(["--skip-ephemeris", "--skip-elevation", "--skip-run"])
     assert exc.value.code == 1
 
 
@@ -115,3 +115,61 @@ def test_settings_flag_missing_file(tmp_path, monkeypatch, capsys) -> None:
     out = capsys.readouterr().out
     assert str(path) in out
     assert "не найден" in out
+
+
+def test_main_runs_simulation_after_prepare(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "settings.json"
+    monkeypatch.setattr(s, "settings_path", lambda: path)
+    nav = tmp_path / "nav.n"
+    nav.write_text("stub", encoding="utf-8")
+    cfg = {
+        "nasa_login": "user",
+        "nasa_pass": "secret",
+        "lat": 55.75,
+        "lng": 37.62,
+        "duration_minutes": 90,
+        "broadcast_ephemeris_path": str(nav),
+    }
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+
+    calls: list[int] = []
+
+    def fake_run_simulation(*args: object, **kwargs: object) -> int:
+        calls.append(1)
+        return 0
+
+    monkeypatch.setattr(cli, "run_simulation", fake_run_simulation)
+
+    cli.main(["--skip-ephemeris", "--skip-elevation"])
+
+    assert calls == [1]
+
+
+def test_skip_run_skips_simulation(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "settings.json"
+    monkeypatch.setattr(s, "settings_path", lambda: path)
+    nav = tmp_path / "nav.n"
+    nav.write_text("stub", encoding="utf-8")
+    cfg = {
+        "nasa_login": "user",
+        "nasa_pass": "secret",
+        "lat": 55.75,
+        "lng": 37.62,
+        "duration_minutes": 90,
+        "broadcast_ephemeris_path": str(nav),
+    }
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+
+    calls: list[int] = []
+
+    def fake_run_simulation(*args: object, **kwargs: object) -> int:
+        calls.append(1)
+        return 0
+
+    monkeypatch.setattr(cli, "run_simulation", fake_run_simulation)
+
+    cli.main(["--skip-ephemeris", "--skip-elevation", "--skip-run"])
+
+    assert calls == []

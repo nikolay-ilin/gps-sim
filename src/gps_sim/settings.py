@@ -9,6 +9,13 @@ from typing import Any
 
 DEFAULT_DURATION_MINUTES = 24 * 60
 
+# Параметры конвейера gps-sdr-sim → hackrf_transfer (можно переопределить в settings.json)
+DEFAULT_SIM_BITS = 8
+DEFAULT_SIM_SAMPLE_RATE_HZ = 2_600_000
+DEFAULT_HACKRF_FREQ_HZ = 1_575_420_000
+DEFAULT_HACKRF_TX_GAIN = 47
+DEFAULT_HACKRF_AMP = 1
+
 
 def settings_path() -> Path:
     """Путь к файлу настроек. Переменная GPS_SIM_SETTINGS — полный путь к JSON (для тестов)."""
@@ -30,11 +37,11 @@ def ephemeris_dir() -> Path:
 
 
 def broadcast_ephemeris_file(cfg: dict[str, Any]) -> Path | None:
-    """Путь к последнему распакованному BRDC, если имя задано в настройках."""
-    name = cfg.get("broadcast_ephemeris_filename")
-    if not name:
+    """Путь к последнему распакованному BRDC, если полный путь задан в настройках."""
+    raw = cfg.get("broadcast_ephemeris_path")
+    if not raw:
         return None
-    return ephemeris_dir() / str(name)
+    return Path(str(raw)).expanduser().resolve()
 
 
 def load_settings() -> dict[str, Any]:

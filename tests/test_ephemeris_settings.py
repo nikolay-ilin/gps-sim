@@ -8,5 +8,6 @@ def test_broadcast_ephemeris_file(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(s, "ephemeris_dir", lambda: ephem)
 
     assert s.broadcast_ephemeris_file({}) is None
-    p = s.broadcast_ephemeris_file({"broadcast_ephemeris_filename": "brdc0100.26n"})
-    assert p == ephem / "brdc0100.26n"
+    full = (ephem / "brdc0100.26n").resolve()
+    p = s.broadcast_ephemeris_file({"broadcast_ephemeris_path": str(full)})
+    assert p == full

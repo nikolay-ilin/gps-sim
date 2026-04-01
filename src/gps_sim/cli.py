@@ -14,6 +14,7 @@ from gps_sim import __version__
 from gps_sim import settings as settings_mod
 from gps_sim.brdc_download import download_latest_broadcast_ephemeris
 from gps_sim.elevation import fetch_elevation
+from gps_sim.run_sim import run_simulation
 from gps_sim.settings import (
     DEFAULT_DURATION_MINUTES,
     ephemeris_dir,
@@ -72,6 +73,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=None,
         metavar="YEAR",
         help="год для каталога CDDIS daily/.../brdc (по умолчанию — текущий календарный год)",
+    )
+    parser.add_argument(
+        "--skip-run",
+        action="store_true",
+        help="после сохранения настроек и обновлений не запускать передачу (gps-sdr-sim → HackRF)",
     )
     ns = parser.parse_args(argv)
     if (ns.lat is None) ^ (ns.lng is None):
@@ -239,7 +245,7 @@ def main(argv: list[str] | None = None) -> None:
                 ephemeris_dir(),
                 year=year,
             )
-            cfg["broadcast_ephemeris_filename"] = unpacked.name
+            cfg["broadcast_ephemeris_path"] = str(unpacked.resolve())
             save_settings(cfg)
         except Exception as e:
             print(f"Ошибка обновления эфемерид: {e}", file=sys.stderr)
@@ -254,6 +260,12 @@ def main(argv: list[str] | None = None) -> None:
         print(f"----------------\n{lat}, {lng}, {elevation_m:.2f}")
         cfg["elevation_m"] = elevation_m
         save_settings(cfg)
+
+    if not args.skip_run:
+        print("[*] Данные обновлены, запуск симуляции и передачи...")
+        rc = run_simulation(cfg, duration_minutes=None, gain=None, interactive=interactive)
+        if rc != 0:
+            sys.exit(rc)
 
 
 if __name__ == "__main__":
