@@ -47,11 +47,14 @@ def test_main_saves_elevation_m(tmp_path, monkeypatch) -> None:
     path.write_text(json.dumps(cfg), encoding="utf-8")
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
 
-    def fake_fetch(lat: float, lng: float, timeout: int = 15) -> float:
+    def fake_cached(cfg: dict, lat: float, lng: float, *, timeout: int = 15) -> float:
         assert lat == 1.0 and lng == 2.0
+        cfg["elevation_m"] = 123.45
+        cfg["elevation_cache_lat"] = lat
+        cfg["elevation_cache_lng"] = lng
         return 123.45
 
-    monkeypatch.setattr(cli, "fetch_elevation", fake_fetch)
+    monkeypatch.setattr(cli, "get_elevation_cached", fake_cached)
     cli.main(["--skip-ephemeris", "--skip-run"])
 
     out = json.loads(path.read_text(encoding="utf-8"))

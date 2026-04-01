@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from gps_sim.run_sim import _bundled_gps_sdr_sim_path, _is_executable_file
 from gps_sim.settings import load_settings, save_settings
 from gps_sim_ui.bridge import MapBridge
+from gps_sim_ui.elevation_thread import ElevationFetchThread
 from gps_sim_ui.worker import SimulationWorker
 
 MAP_HTML = """<!DOCTYPE html>
@@ -47,15 +48,28 @@ MAP_HTML = """<!DOCTYPE html>
 <body>
   <div id="map"></div>
   <script>
+    var mapClickBlocked = false;
     var map = L.map('map').setView([{lat}, {lng}], {zoom});
+    var esriAttr =
+      'Спутник: Esri, Maxar, Earthstar Geographics &mdash; '
+      'подписи и объекты: Esri, Garmin, OpenStreetMap';
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
-      {{ maxZoom: 19, attribution: 'Esri' }}
+      {{ maxZoom: 19, attribution: esriAttr }}
+    ).addTo(map);
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{{z}}/{{y}}/{{x}}',
+      {{ maxZoom: 19, opacity: 1 }}
     ).addTo(map);
     var marker = L.marker([{lat}, {lng}]).addTo(map);
+    window.__setMapClickBlocked = function(blocked) {{
+      mapClickBlocked = !!blocked;
+    }};
     new QWebChannel(qt.webChannelTransport, function(channel) {{
       var bridge = channel.objects.bridge;
       map.on('click', function(e) {{
+        if (mapClickBlocked) return;
+        mapClickBlocked = true;
         var la = e.latlng.lat;
         var ln = e.latlng.lng;
         marker.setLatLng([la, ln]);
@@ -127,6 +141,10 @@ def _has_saved_coordinates(cfg: dict[str, Any]) -> bool:
     return True
 
 
+def _hint_text_coords_elevation(lat: float, lng: float, elev_m: float) -> str:
+    return f"{lat:.6f}, {lng:.6f}\nвысота: {elev_m:.2f} м"
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -141,6 +159,8 @@ class MainWindow(QMainWindow):
             self._pending_lat = self._lat
             self._pending_lng = self._lng
         self._worker: SimulationWorker | None = None
+        self._elev_thread: ElevationFetchThread | None = None
+        self._fetch_seq = 0
 
         self._view = QWebEngineView()
         s = self._view.settings()
@@ -160,13 +180,12 @@ class MainWindow(QMainWindow):
         self._action_btn.setEnabled(self._pending_lat is not None and self._pending_lng is not None)
         self._action_btn.clicked.connect(self._on_action)
 
-        hint = QLabel(
-            "Нажмите Start с сохранёнными координатами или кликните по карте, чтобы выбрать точку.",
-        )
-        hint.setWordWrap(True)
+        self._hint_label = QLabel()
+        self._hint_label.setWordWrap(True)
+        self._refresh_hint_initial()
+
         bar = QHBoxLayout()
-        bar.addWidget(hint)
-        bar.addStretch()
+        bar.addWidget(self._hint_label, stretch=1)
         bar.addWidget(self._action_btn)
 
         self._log = QTextEdit()
@@ -186,12 +205,80 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._log)
         self.setCentralWidget(central)
 
+    def _set_map_click_blocked(self, blocked: bool) -> None:
+        """Синхронизация с JS: разрешить/запретить следующий клик по карте."""
+        b = "true" if blocked else "false"
+        self._view.page().runJavaScript(
+            f"if (typeof window.__setMapClickBlocked === 'function') "
+            f"{{ window.__setMapClickBlocked({b}); }}",
+        )
+
+    def _on_elev_fetch_finished(self, t: ElevationFetchThread) -> None:
+        if t.request_seq != self._fetch_seq:
+            return
+        self._set_map_click_blocked(False)
+
+    def _refresh_hint_initial(self) -> None:
+        cfg = self._cfg
+        if not _has_saved_coordinates(cfg):
+            self._hint_label.setText("Нажми на карту для выбора точки")
+            return
+        lat = float(cfg["lat"])
+        lng = float(cfg["lng"])
+        em = cfg.get("elevation_m")
+        if em is not None:
+            self._hint_label.setText(_hint_text_coords_elevation(lat, lng, float(em)))
+        else:
+            self._hint_label.setText(f"{lat:.6f}, {lng:.6f}\nвысота: —")
+
     def _on_map_click(self, lat: float, lng: float) -> None:
         self._pending_lat = lat
         self._pending_lng = lng
+        self._fetch_seq += 1
+        seq = self._fetch_seq
+
+        self._hint_label.setText(f"{lat:.6f}, {lng:.6f}\nопределение высоты...")
+        self._append_log(f"[высота] выбор точки #{seq}: {lat:.6f}, {lng:.6f}\n")
+
         if self._worker is None or not self._worker.isRunning():
             self._action_btn.setText("Start")
-            self._action_btn.setEnabled(True)
+            self._action_btn.setEnabled(False)
+
+        t = ElevationFetchThread(lat, lng, seq)
+        self._elev_thread = t
+        t.log_line.connect(self._append_log)
+
+        def on_ready(la: float, ln: float, elev: float) -> None:
+            if seq != self._fetch_seq:
+                return
+            self._cfg = load_settings()
+            self._lat, self._lng = la, ln
+            self._hint_label.setText(_hint_text_coords_elevation(la, ln, elev))
+            if self._worker is None or not self._worker.isRunning():
+                self._action_btn.setEnabled(True)
+
+        def on_fail(msg: str) -> None:
+            if seq != self._fetch_seq:
+                return
+            self._hint_label.setText(f"{lat:.6f}, {lng:.6f}\nошибка высоты: {msg}")
+            if self._worker is None or not self._worker.isRunning():
+                self._action_btn.setEnabled(True)
+            short = msg if len(msg) <= 500 else msg[:500] + "…"
+            QMessageBox.warning(
+                self,
+                "Высота",
+                f"Не удалось получить высоту по выбранной точке:\n{short}",
+            )
+
+        t.elevation_ready.connect(on_ready)
+        t.failed.connect(on_fail)
+        t.finished.connect(lambda tt=t: self._on_elev_fetch_finished(tt))
+        t.finished.connect(t.deleteLater)
+        try:
+            t.start()
+        except Exception:
+            self._set_map_click_blocked(False)
+            raise
 
     def _on_action(self) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -219,10 +306,23 @@ class MainWindow(QMainWindow):
         self._action_btn.setEnabled(self._pending_lat is not None and self._pending_lng is not None)
         self._cfg = load_settings()
         self._lat, self._lng = _default_lat_lng(self._cfg)
+        if self._pending_lat is not None and self._pending_lng is not None:
+            em = self._cfg.get("elevation_m")
+            if em is not None:
+                self._hint_label.setText(
+                    _hint_text_coords_elevation(self._pending_lat, self._pending_lng, float(em)),
+                )
+            else:
+                self._refresh_hint_initial()
+        else:
+            self._refresh_hint_initial()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._worker is not None and self._worker.isRunning():
             self._worker.request_stop()
             self._worker.wait(300_000)
         self._worker = None
+        if self._elev_thread is not None and self._elev_thread.isRunning():
+            self._elev_thread.wait(5_000)
+        self._elev_thread = None
         event.accept()

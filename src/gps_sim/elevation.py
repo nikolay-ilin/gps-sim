@@ -6,9 +6,13 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 
 API_URL = "https://api.open-meteo.com/v1/elevation"
 USER_AGENT = "gps-sim/elevation"
+
+# ~0.1 м по экватору; достаточно для «та же точка на карте»
+_GEO_EPS = 1e-6
 
 
 def parse_coordinates(raw: str) -> tuple[float, float]:
@@ -35,14 +39,74 @@ def parse_coordinates(raw: str) -> tuple[float, float]:
     return lat, lon
 
 
-def fetch_elevation(latitude: float, longitude: float, timeout: int = 15) -> float:
+def _same_geo(lat1: float, lng1: float, lat2: float, lng2: float) -> bool:
+    return abs(lat1 - lat2) < _GEO_EPS and abs(lng1 - lng2) < _GEO_EPS
+
+
+def elevation_cache_valid(cfg: dict[str, Any], lat: float, lng: float) -> bool:
+    """True, если в cfg уже есть высота для тех же координат (см. elevation_cache_lat/lng)."""
+    em = cfg.get("elevation_m")
+    if em is None:
+        return False
+    try:
+        float(em)
+    except (TypeError, ValueError):
+        return False
+    clat = cfg.get("elevation_cache_lat")
+    clng = cfg.get("elevation_cache_lng")
+    if clat is None or clng is None:
+        return False
+    try:
+        return _same_geo(float(clat), float(clng), lat, lng)
+    except (TypeError, ValueError):
+        return False
+
+
+def elevation_api_url(latitude: float, longitude: float) -> str:
+    """Полный URL запроса к Open-Meteo Elevation API (для логов и отладки)."""
     query = urllib.parse.urlencode(
         {
             "latitude": latitude,
             "longitude": longitude,
         }
     )
-    url = f"{API_URL}?{query}"
+    return f"{API_URL}?{query}"
+
+
+def get_elevation_cached(
+    cfg: dict[str, Any],
+    lat: float,
+    lng: float,
+    *,
+    timeout: int = 15,
+    response_body_preview: list[str] | None = None,
+) -> float:
+    """
+    Возвращает высоту для (lat, lng): из кэша в cfg при совпадении геопозиции, иначе запрос API.
+    При сетевом запросе обновляет elevation_m и elevation_cache_lat / elevation_cache_lng.
+    """
+    if elevation_cache_valid(cfg, lat, lng):
+        return float(cfg["elevation_m"])
+    elev = fetch_elevation(
+        lat,
+        lng,
+        timeout=timeout,
+        response_body_preview=response_body_preview,
+    )
+    cfg["elevation_m"] = elev
+    cfg["elevation_cache_lat"] = lat
+    cfg["elevation_cache_lng"] = lng
+    return elev
+
+
+def fetch_elevation(
+    latitude: float,
+    longitude: float,
+    timeout: int = 15,
+    *,
+    response_body_preview: list[str] | None = None,
+) -> float:
+    url = elevation_api_url(latitude, longitude)
     request = urllib.request.Request(
         url,
         headers={"User-Agent": USER_AGENT},
@@ -51,6 +115,8 @@ def fetch_elevation(latitude: float, longitude: float, timeout: int = 15) -> flo
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body = response.read().decode("utf-8")
+            if response_body_preview is not None:
+                response_body_preview.append(body[:500])
     except urllib.error.HTTPError as exc:
         try:
             raw = exc.read()

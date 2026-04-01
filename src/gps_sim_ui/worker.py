@@ -1,4 +1,4 @@
-"""Фоновый запуск: эфемериды, высота, run_simulation."""
+"""Фоновый запуск: эфемериды, run_simulation."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from datetime import datetime
 from PySide6.QtCore import QThread, Signal
 
 from gps_sim.brdc_download import download_latest_broadcast_ephemeris
-from gps_sim.elevation import fetch_elevation
+from gps_sim.elevation import elevation_cache_valid, get_elevation_cached
 from gps_sim.run_sim import run_simulation
 from gps_sim.settings import (
     DEFAULT_DURATION_MINUTES,
@@ -51,11 +51,9 @@ class SimulationWorker(QThread):
                 self.finished.emit(130)
                 return
 
-            self.log_line.emit("Получение высоты по координатам…\n")
-            elev = fetch_elevation(self._lat, self._lng)
-            cfg["elevation_m"] = elev
-            save_settings(cfg)
-            self.log_line.emit(f"Высота: {elev:.2f} м\n")
+            if not elevation_cache_valid(cfg, self._lat, self._lng):
+                get_elevation_cached(cfg, self._lat, self._lng)
+                save_settings(cfg)
 
             if self._cancel.is_set():
                 self.log_line.emit("Остановлено до загрузки эфемерид.\n")

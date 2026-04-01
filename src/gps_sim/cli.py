@@ -13,7 +13,7 @@ from typing import Any
 from gps_sim import __version__
 from gps_sim import settings as settings_mod
 from gps_sim.brdc_download import download_latest_broadcast_ephemeris
-from gps_sim.elevation import fetch_elevation
+from gps_sim.elevation import get_elevation_cached
 from gps_sim.run_sim import run_simulation
 from gps_sim.settings import (
     DEFAULT_DURATION_MINUTES,
@@ -253,12 +253,11 @@ def main(argv: list[str] | None = None) -> None:
 
     if not args.skip_elevation:
         try:
-            elevation_m = fetch_elevation(lat, lng)
+            elevation_m = get_elevation_cached(cfg, lat, lng)
         except Exception as e:
             print(f"Ошибка получения высоты по координатам: {e}", file=sys.stderr)
             sys.exit(1)
         print(f"----------------\n{lat}, {lng}, {elevation_m:.2f}")
-        cfg["elevation_m"] = elevation_m
         save_settings(cfg)
 
     if not args.skip_run:
