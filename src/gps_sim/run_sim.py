@@ -64,8 +64,28 @@ def _coerce_float(cfg: dict[str, Any], key: str, default: float) -> float:
         return default
 
 
-def _find_hackrf_transfer() -> str | None:
-    return shutil.which("hackrf_transfer")
+def _darwin_hackrf_transfer_search_paths() -> tuple[Path, ...]:
+    """Типичные пути Homebrew; GUI на macOS часто не видит их в PATH."""
+    return (
+        Path("/opt/homebrew/bin/hackrf_transfer"),
+        Path("/usr/local/bin/hackrf_transfer"),
+    )
+
+
+def _resolve_hackrf_transfer(cfg: dict[str, Any]) -> str | None:
+    raw = cfg.get("hackrf_transfer_path")
+    if raw:
+        p = Path(str(raw)).expanduser().resolve()
+        if _is_executable_file(p):
+            return str(p)
+    w = shutil.which("hackrf_transfer")
+    if w:
+        return w
+    if sys.platform == "darwin":
+        for p in _darwin_hackrf_transfer_search_paths():
+            if _is_executable_file(p):
+                return str(p.resolve())
+    return None
 
 
 def _bundled_gps_sdr_sim_filename() -> str | None:
@@ -359,7 +379,7 @@ def format_simulation_params_log(cfg: dict[str, Any]) -> str:
         f"hackrf_transfer: -f {freq_hz} -s {sample_hz} -a {amp} -x {gain_val}"
     )
     lines.append(f"Исполняемый файл gps-sdr-sim: {_gps_sdr_sim_path_for_log(cfg)}")
-    hackrf_w = _find_hackrf_transfer()
+    hackrf_w = _resolve_hackrf_transfer(cfg)
     lines.append(f"hackrf_transfer: {hackrf_w or 'не найден в PATH'}")
 
     return "\n".join(lines) + "\n"
@@ -374,10 +394,12 @@ def run_simulation(
     cancel_event: threading.Event | None = None,
 ) -> int:
     """Конвейер gps-sdr-sim → hackrf_transfer по настройкам; возвращает код выхода."""
-    if _find_hackrf_transfer() is None:
+    hackrf_bin = _resolve_hackrf_transfer(cfg)
+    if hackrf_bin is None:
         print(
-            "Не найден hackrf_transfer в PATH. Установите host tools для HackRF и убедитесь, "
-            "что каталог с бинарями в PATH.\n"
+            "Не найден hackrf_transfer (ни в PATH, ни исполняемый файл по hackrf_transfer_path в настройках). "
+            "Установите host tools для HackRF (macOS: brew install hackrf) или укажите полный путь в "
+            "settings.json → hackrf_transfer_path.\n"
             f"Документация: {HACKRF_HOST_TOOLS_DOC_URL}",
             file=sys.stderr,
         )
@@ -445,7 +467,7 @@ def run_simulation(
     ]
 
     hackrf_cmd = [
-        "hackrf_transfer",
+        hackrf_bin,
         "-t",
         "-",
         "-f",

@@ -14,7 +14,7 @@ _BRDC_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "brdc_minimal.n"
 
 
 def test_main_fails_without_hackrf(monkeypatch) -> None:
-    monkeypatch.setattr(run_sim, "_find_hackrf_transfer", lambda: None)
+    monkeypatch.setattr(run_sim, "_resolve_hackrf_transfer", lambda _cfg: None)
 
     with pytest.raises(SystemExit) as exc:
         run_sim.main([])
@@ -32,12 +32,8 @@ def test_main_fails_without_gps_noninteractive(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(run_sim, "load_settings", lambda: cfg)
     monkeypatch.setattr(run_sim, "_bundled_gps_sdr_sim_path", lambda: None)
 
-    def fake_which(name: str) -> str | None:
-        if name == "hackrf_transfer":
-            return "/bin/hackrf_transfer"
-        return None
-
-    monkeypatch.setattr(run_sim.shutil, "which", fake_which)
+    monkeypatch.setattr(run_sim, "_resolve_hackrf_transfer", lambda _cfg: "/bin/hackrf_transfer")
+    monkeypatch.setattr(run_sim.shutil, "which", lambda _name: None)
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
 
     with pytest.raises(SystemExit) as exc:
@@ -59,7 +55,7 @@ def test_main_succeeds_with_mock_pipeline(tmp_path, monkeypatch) -> None:
         "gps_sdr_sim_path": str(fake_gps),
     }
     monkeypatch.setattr(run_sim, "load_settings", lambda: cfg)
-    monkeypatch.setattr(run_sim, "_find_hackrf_transfer", lambda: "/usr/bin/hackrf_transfer")
+    monkeypatch.setattr(run_sim, "_resolve_hackrf_transfer", lambda _cfg: "/usr/bin/hackrf_transfer")
     monkeypatch.setattr(run_sim, "run_pipeline", lambda *_a, **_k: 0)
 
     run_sim.main([])
@@ -268,6 +264,34 @@ def test_try_resolve_bundled_saves_settings(tmp_path, monkeypatch) -> None:
     assert out == str(fake_bin.resolve())
     assert cfg.get("gps_sdr_sim_path") == str(fake_bin.resolve())
     assert settings_path.is_file()
+
+
+def test_resolve_hackrf_transfer_explicit_path(tmp_path) -> None:
+    fake = tmp_path / "hackrf_transfer"
+    fake.write_bytes(b"#!/bin/sh\n")
+    fake.chmod(0o755)
+    cfg = {"hackrf_transfer_path": str(fake)}
+    assert run_sim._resolve_hackrf_transfer(cfg) == str(fake.resolve())
+
+
+def test_resolve_hackrf_transfer_falls_back_to_which(monkeypatch) -> None:
+    def fake_which(name: str) -> str | None:
+        return "/opt/homebrew/bin/hackrf_transfer" if name == "hackrf_transfer" else None
+
+    monkeypatch.setattr(run_sim.shutil, "which", fake_which)
+    assert run_sim._resolve_hackrf_transfer({}) == "/opt/homebrew/bin/hackrf_transfer"
+
+
+def test_resolve_hackrf_transfer_darwin_homebrew_without_path(monkeypatch, tmp_path) -> None:
+    fake = tmp_path / "hackrf_transfer"
+    fake.write_bytes(b"#!/bin/sh\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(run_sim.sys, "platform", "darwin")
+    monkeypatch.setattr(run_sim.shutil, "which", lambda _n: None)
+    monkeypatch.setattr(
+        run_sim, "_darwin_hackrf_transfer_search_paths", lambda: (fake,)
+    )
+    assert run_sim._resolve_hackrf_transfer({}) == str(fake.resolve())
 
 
 def test_format_simulation_params_log(tmp_path) -> None:

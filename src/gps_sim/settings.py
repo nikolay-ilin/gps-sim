@@ -9,7 +9,8 @@ from typing import Any
 
 DEFAULT_DURATION_MINUTES = 24 * 60
 
-# Параметры конвейера gps-sdr-sim → hackrf_transfer (можно переопределить в settings.json)
+# Параметры конвейера gps-sdr-sim → hackrf_transfer (можно переопределить в settings.json).
+# hackrf_transfer_path — необязательный полный путь к бинарю, если его нет в PATH (например GUI без shell PATH).
 DEFAULT_SIM_BITS = 8
 DEFAULT_SIM_SAMPLE_RATE_HZ = 2_600_000
 DEFAULT_HACKRF_FREQ_HZ = 1_575_420_000
