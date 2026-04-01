@@ -516,7 +516,7 @@ class MainWindow(QMainWindow):
             item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self._history_list.addItem(item)
             self._history_list.setItemWidget(item, row)
-            item.setSizeHint(row.sizeHint())
+            item.setSizeHint(row.sizeHint() + QSize(0, 8))
 
     def _on_history_delete_clicked(self, lat: float, lng: float) -> None:
         remove_history_entry_at_coords(lat, lng)
