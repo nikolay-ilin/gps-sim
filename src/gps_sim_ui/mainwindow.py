@@ -50,13 +50,57 @@ MAP_HTML = """<!DOCTYPE html>
   <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
   <style>
     html, body {{ margin: 0; height: 100%; }}
+    #map-wrap {{ position: relative; height: 100%; width: 100%; }}
     #map {{ height: 100%; width: 100%; }}
+    #map-search-wrap {{
+      position: absolute;
+      z-index: 1000;
+      top: 10px;
+      left: 50px;
+      right: 12px;
+      max-width: 420px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 8px 10px;
+      border-radius: 6px;
+      box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+    }}
+    #map-search-input {{
+      flex: 1;
+      min-width: 0;
+      border: 1px solid #bbb;
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-size: 14px;
+    }}
+    #map-search-btn {{
+      flex-shrink: 0;
+      padding: 8px 14px;
+      font-size: 14px;
+      cursor: pointer;
+      border: 1px solid #2e7d32;
+      border-radius: 4px;
+      background: #2e7d32;
+      color: #fff;
+      font-weight: 600;
+    }}
+    #map-search-btn:hover {{ background: #1b5e20; }}
   </style>
 </head>
 <body>
-  <div id="map"></div>
+  <div id="map-wrap">
+    <div id="map"></div>
+    <div id="map-search-wrap">
+      <input type="text" id="map-search-input" placeholder="Поиск места (OpenStreetMap)…"
+             autocomplete="off" spellcheck="false"/>
+      <button type="button" id="map-search-btn">Найти</button>
+    </div>
+  </div>
   <script>
     var mapClickBlocked = false;
+    var bridge = null;
     var map = L.map('map').setView([{lat}, {lng}], {zoom});
     var mapAttr =
       'Спутник: Esri, Maxar &mdash; '
@@ -80,6 +124,44 @@ MAP_HTML = """<!DOCTYPE html>
       }}
     ).addTo(map);
     var marker = L.marker([{lat}, {lng}]).addTo(map);
+    var searchInput = document.getElementById('map-search-input');
+    var searchBtn = document.getElementById('map-search-btn');
+    function runSearch() {{
+      if (mapClickBlocked) return;
+      var q = searchInput.value.trim();
+      if (!q) return;
+      var url = 'https://nominatim.openstreetmap.org/search?q=' +
+        encodeURIComponent(q) + '&format=json&limit=1';
+      fetch(url, {{
+        method: 'GET',
+        headers: {{
+          'Accept': 'application/json',
+          'Accept-Language': 'ru,en'
+        }}
+      }})
+        .then(function (r) {{ return r.json(); }})
+        .then(function (data) {{
+          if (!data || !data.length) {{
+            alert('Ничего не найдено. Уточните запрос.');
+            return;
+          }}
+          var lat = parseFloat(data[0].lat);
+          var lng = parseFloat(data[0].lon);
+          if (isNaN(lat) || isNaN(lng)) return;
+          mapClickBlocked = true;
+          marker.setLatLng([lat, lng]);
+          var z = Math.max(map.getZoom(), 14);
+          map.setView([lat, lng], z);
+          if (bridge) bridge.reportClick(lat, lng);
+        }})
+        .catch(function () {{
+          alert('Не удалось выполнить поиск. Проверьте сеть.');
+        }});
+    }}
+    searchBtn.addEventListener('click', runSearch);
+    searchInput.addEventListener('keydown', function (e) {{
+      if (e.key === 'Enter') runSearch();
+    }});
     window.__setMapClickBlocked = function(blocked) {{
       mapClickBlocked = !!blocked;
     }};
@@ -89,7 +171,7 @@ MAP_HTML = """<!DOCTYPE html>
       marker.setLatLng([lat, lng]);
     }};
     new QWebChannel(qt.webChannelTransport, function(channel) {{
-      var bridge = channel.objects.bridge;
+      bridge = channel.objects.bridge;
       map.on('click', function(e) {{
         if (mapClickBlocked) return;
         mapClickBlocked = true;
