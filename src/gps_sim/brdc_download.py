@@ -143,5 +143,5 @@ def download_latest_broadcast_ephemeris(
         unpacked = gunzip_file(gz_path)
         gz_path.unlink(missing_ok=True)
 
-    print(f"Готово: {unpacked}")
+    print(f"{unpacked}")
     return unpacked

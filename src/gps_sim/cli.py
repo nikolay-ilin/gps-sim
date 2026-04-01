@@ -13,6 +13,7 @@ from typing import Any
 from gps_sim import __version__
 from gps_sim import settings as settings_mod
 from gps_sim.brdc_download import download_latest_broadcast_ephemeris
+from gps_sim.elevation import fetch_elevation
 from gps_sim.settings import (
     DEFAULT_DURATION_MINUTES,
     ephemeris_dir,
@@ -59,6 +60,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--skip-ephemeris",
         action="store_true",
         help="не загружать broadcast-эфемериды с CDDIS после сохранения настроек",
+    )
+    parser.add_argument(
+        "--skip-elevation",
+        action="store_true",
+        help="не запрашивать высоту над уровнем моря; для офлайна задайте --skip-elevation",
     )
     parser.add_argument(
         "--brdc-year",
@@ -238,6 +244,16 @@ def main(argv: list[str] | None = None) -> None:
         except Exception as e:
             print(f"Ошибка обновления эфемерид: {e}", file=sys.stderr)
             sys.exit(1)
+
+    if not args.skip_elevation:
+        try:
+            elevation_m = fetch_elevation(lat, lng)
+        except Exception as e:
+            print(f"Ошибка получения высоты по координатам: {e}", file=sys.stderr)
+            sys.exit(1)
+        print(f"----------------\n{lat}, {lng}, {elevation_m:.2f}")
+        cfg["elevation_m"] = elevation_m
+        save_settings(cfg)
 
 
 if __name__ == "__main__":
