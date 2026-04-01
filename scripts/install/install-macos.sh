@@ -22,7 +22,7 @@ fi
 ensure_venv_and_install "$REPO" "[dev,ui]"
 
 EXEC_UI=$(exec_gps_sim_ui_unix "$REPO")
-TEMPLATE="$REPO/docs/templates/run-gps-sim-ui-macos.sh.template"
+TEMPLATE="$SCRIPT_DIR/templates/run-gps-sim-ui-macos.sh.template"
 OUT_SH="$REPO/run-gps-sim-ui.command"
 
 if [ -f "$TEMPLATE" ]; then
