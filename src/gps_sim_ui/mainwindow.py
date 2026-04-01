@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QThread, QTimer
+from PySide6.QtCore import QEvent, QSize, Qt, QThread, QTimer
 from PySide6.QtGui import QCloseEvent, QShowEvent, QTextCursor
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineSettings
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QStyle,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -253,6 +254,8 @@ class MainWindow(QMainWindow):
         self._tx_start_monotonic: float | None = None
         self._broadcast_elapsed_timer: QTimer | None = None
         self._show_logs_panel = bool(self._cfg.get("ui_show_logs_panel", False))
+        self._first_show_handled = False
+        self._fullscreen_persist_enabled = False
 
         self._view = QWebEngineView()
         s = self._view.settings()
@@ -304,7 +307,18 @@ class MainWindow(QMainWindow):
         self._toggle_logs_btn.setFixedWidth(32)
         self._toggle_logs_btn.setToolTip("Показать или скрыть панель журнала")
         self._toggle_logs_btn.clicked.connect(self._on_toggle_logs_panel)
-        actions.addWidget(self._toggle_logs_btn)
+
+        self._fullscreen_btn = QPushButton()
+        self._fullscreen_btn.setFixedWidth(32)
+        self._fullscreen_btn.setIconSize(QSize(18, 18))
+        self._fullscreen_btn.clicked.connect(self._on_toggle_fullscreen)
+
+        logs_col = QVBoxLayout()
+        logs_col.setSpacing(4)
+        logs_col.setContentsMargins(0, 0, 0, 0)
+        logs_col.addWidget(self._toggle_logs_btn)
+        logs_col.addWidget(self._fullscreen_btn)
+        actions.addLayout(logs_col)
         bar.addLayout(actions)
 
         self._log = QTextEdit()
@@ -331,6 +345,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self._apply_logs_panel_visibility()
+        self._apply_fullscreen_button_appearance()
 
     def _apply_logs_panel_visibility(self) -> None:
         self._log.setVisible(self._show_logs_panel)
@@ -347,8 +362,56 @@ class MainWindow(QMainWindow):
         self._cfg = cfg
         self._apply_logs_panel_visibility()
 
+    def _is_fullscreen(self) -> bool:
+        return bool(self.windowState() & Qt.WindowState.WindowFullScreen)
+
+    def _apply_fullscreen_button_appearance(self) -> None:
+        st = self.style()
+        if self._is_fullscreen():
+            self._fullscreen_btn.setText("⤴")
+            self._fullscreen_btn.setToolTip("Выйти из полного экрана")
+        else:
+            self._fullscreen_btn.setText("⤵")
+            self._fullscreen_btn.setToolTip("Полный экран")
+
+    def _persist_fullscreen_setting(self) -> None:
+        if not self._fullscreen_persist_enabled:
+            return
+        fs = self._is_fullscreen()
+        cfg = load_settings()
+        if cfg.get("ui_fullscreen") == fs:
+            return
+        cfg["ui_fullscreen"] = fs
+        save_settings(cfg)
+        self._cfg = cfg
+
+    def _restore_fullscreen_session(self) -> None:
+        self.showFullScreen()
+        QTimer.singleShot(0, self._enable_fullscreen_persist)
+
+    def _enable_fullscreen_persist(self) -> None:
+        self._fullscreen_persist_enabled = True
+
+    def _on_toggle_fullscreen(self) -> None:
+        if self._is_fullscreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._apply_fullscreen_button_appearance()
+            self._persist_fullscreen_setting()
+
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
+        if not self._first_show_handled:
+            self._first_show_handled = True
+            if bool(self._cfg.get("ui_fullscreen", False)):
+                QTimer.singleShot(0, self._restore_fullscreen_session)
+            else:
+                QTimer.singleShot(0, self._enable_fullscreen_persist)
         if self._brdc_startup_scheduled:
             return
         self._brdc_startup_scheduled = True
