@@ -18,6 +18,7 @@ DEFAULT_HACKRF_AMP = 1
 
 # UI: ui_show_logs_panel — bool, показывать ли панель журнала справа (50% ширины).
 # UI: ui_fullscreen — bool, запускать ли окно в полноэкранном режиме (как в последнем сеансе).
+# История трансляций: файл history.json в том же каталоге, что и settings.json (см. gps_sim.history).
 
 def settings_path() -> Path:
     """Путь к файлу настроек. Переменная GPS_SIM_SETTINGS — полный путь к JSON (для тестов)."""

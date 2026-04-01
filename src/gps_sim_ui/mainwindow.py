@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QEvent, QSize, Qt, QThread, QTimer
-from PySide6.QtGui import QCloseEvent, QShowEvent, QTextCursor
+from PySide6.QtGui import QCloseEvent, QResizeEvent, QShowEvent, QTextCursor
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -16,16 +16,19 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QStyle,
+    QSizePolicy,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from gps_sim.brdc_download import parse_ephemeris_updated_at
+from gps_sim.history import format_history_entry_label, record_transmission, sorted_history_entries
 from gps_sim.run_sim import _bundled_gps_sdr_sim_path, _is_executable_file
 from gps_sim.settings import broadcast_ephemeris_file, load_settings, save_settings
 from gps_sim_ui.brdc_thread import BrdcFetchThread
@@ -273,19 +276,23 @@ class MainWindow(QMainWindow):
 
         self._action_btn = QPushButton("Запуск")
         sh = self._action_btn.sizeHint()
-        self._action_btn.setMinimumSize(max(96, sh.width() * 2), max(36, sh.height() * 2))
+        self._action_btn.setMinimumHeight(max(36, sh.height() * 2))
+        self._action_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._apply_action_button_style_idle()
         self._action_btn.clicked.connect(self._on_action)
 
         self._ephem_btn = QPushButton()
         self._ephem_btn.setStyleSheet(_EPHEM_BTN_STYLE)
-        self._ephem_btn.setMinimumWidth(200)
+        self._ephem_btn.setMinimumWidth(140)
         self._ephem_btn.setToolTip("Обновить файл broadcast-эфемерид BRDC с CDDIS (принудительно)")
         self._ephem_btn.clicked.connect(self._on_ephem_clicked)
         self._refresh_ephem_button()
 
-        self._hint_label = QLabel()
-        self._hint_label.setWordWrap(True)
+        self._location_btn = QPushButton()
+        self._location_btn.setStyleSheet(_EPHEM_BTN_STYLE)
+        self._location_btn.setFixedWidth(150)
+        self._location_btn.setToolTip("Текущая точка; открыть историю локаций")
+        self._location_btn.clicked.connect(self._on_location_btn_clicked)
 
         self._recenter_btn = QPushButton("⌖")
         self._recenter_btn.setToolTip("Перейти к выбранным координатам")
@@ -296,13 +303,11 @@ class MainWindow(QMainWindow):
 
         bar = QHBoxLayout()
         bar.addWidget(self._recenter_btn)
-        bar.addWidget(self._hint_label, stretch=1)
-        actions = QHBoxLayout()
-        actions.setSpacing(0)
-        actions.addWidget(self._action_btn)
-        actions.addSpacing(12)
-        actions.addWidget(self._ephem_btn)
-        actions.addSpacing(8)
+        bar.addWidget(self._location_btn)
+        bar.addWidget(self._action_btn, stretch=1)
+        bar.addSpacing(12)
+        bar.addWidget(self._ephem_btn)
+        bar.addSpacing(8)
         self._toggle_logs_btn = QPushButton()
         self._toggle_logs_btn.setFixedWidth(32)
         self._toggle_logs_btn.setToolTip("Показать или скрыть панель журнала")
@@ -318,8 +323,7 @@ class MainWindow(QMainWindow):
         logs_col.setContentsMargins(0, 0, 0, 0)
         logs_col.addWidget(self._toggle_logs_btn)
         logs_col.addWidget(self._fullscreen_btn)
-        actions.addLayout(logs_col)
-        bar.addLayout(actions)
+        bar.addLayout(logs_col)
 
         self._log = QTextEdit()
         self._log.setReadOnly(True)
@@ -331,6 +335,21 @@ class MainWindow(QMainWindow):
         bar_l.setContentsMargins(8, 4, 8, 4)
         bar_l.addLayout(bar)
 
+        self._history_panel = QWidget()
+        self._history_panel.setVisible(False)
+        hist_lay = QVBoxLayout(self._history_panel)
+        hist_lay.setContentsMargins(8, 8, 8, 8)
+        _hist_title = QLabel("История локаций")
+        hist_lay.addWidget(_hist_title)
+        self._history_list = QListWidget()
+        self._history_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._history_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._history_list.setStyleSheet(
+            "QListWidget::item { margin-bottom: 10px; }",
+        )
+        self._history_list.itemClicked.connect(self._on_history_item_clicked)
+        hist_lay.addWidget(self._history_list, stretch=1)
+
         self._left_panel = QWidget()
         left_lay = QVBoxLayout(self._left_panel)
         left_lay.setContentsMargins(0, 0, 0, 0)
@@ -340,6 +359,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         root = QHBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
+        root.addWidget(self._history_panel, 0)
         root.addWidget(self._left_panel, stretch=1)
         root.addWidget(self._log, stretch=1)
         self.setCentralWidget(central)
@@ -362,16 +382,75 @@ class MainWindow(QMainWindow):
         self._cfg = cfg
         self._apply_logs_panel_visibility()
 
+    def _on_location_btn_clicked(self) -> None:
+        show = not self._history_panel.isVisible()
+        self._history_panel.setVisible(show)
+        if show:
+            self._populate_history_list()
+            self._apply_history_panel_width()
+
+    def _populate_history_list(self) -> None:
+        self._history_list.clear()
+        for entry in sorted_history_entries():
+            try:
+                lat = float(entry["lat"])
+                lng = float(entry["lng"])
+                elev = float(entry.get("elevation_m", 0.0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            item = QListWidgetItem(format_history_entry_label(entry))
+            item.setData(Qt.ItemDataRole.UserRole, {"lat": lat, "lng": lng, "elevation_m": elev})
+            self._history_list.addItem(item)
+
+    def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(data, dict):
+            return
+        try:
+            lat = float(data["lat"])
+            lng = float(data["lng"])
+            elev = float(data["elevation_m"])
+        except (KeyError, TypeError, ValueError):
+            return
+        self._apply_history_entry(lat, lng, elev)
+
+    def _apply_history_entry(self, lat: float, lng: float, elev_m: float) -> None:
+        cfg = load_settings()
+        cfg["lat"] = lat
+        cfg["lng"] = lng
+        cfg["elevation_m"] = elev_m
+        save_settings(cfg)
+        self._cfg = cfg
+        self._pending_lat = lat
+        self._pending_lng = lng
+        self._lat = lat
+        self._lng = lng
+        self._location_btn.setText(_hint_text_coords_elevation(lat, lng, elev_m))
+        self._view.page().runJavaScript(
+            "if (typeof window.__flyToSelection === 'function') { "
+            f"window.__flyToSelection({lat}, {lng}); "
+            "}",
+        )
+        self._update_recenter_button_state()
+        self._sync_start_button_enabled()
+
+    def _apply_history_panel_width(self) -> None:
+        if not self._history_panel.isVisible():
+            return
+        cw = self.centralWidget()
+        base = cw.width() if cw is not None else self.width()
+        w = max(120, int(base * 0.30))
+        self._history_panel.setFixedWidth(w)
+
     def _is_fullscreen(self) -> bool:
         return bool(self.windowState() & Qt.WindowState.WindowFullScreen)
 
     def _apply_fullscreen_button_appearance(self) -> None:
-        st = self.style()
         if self._is_fullscreen():
-            self._fullscreen_btn.setText("⤴")
+            self._fullscreen_btn.setText("⇲")
             self._fullscreen_btn.setToolTip("Выйти из полного экрана")
         else:
-            self._fullscreen_btn.setText("⤵")
+            self._fullscreen_btn.setText("⇱")
             self._fullscreen_btn.setToolTip("Полный экран")
 
     def _persist_fullscreen_setting(self) -> None:
@@ -403,6 +482,10 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.Type.WindowStateChange:
             self._apply_fullscreen_button_appearance()
             self._persist_fullscreen_setting()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._apply_history_panel_width()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
@@ -446,6 +529,27 @@ class MainWindow(QMainWindow):
         self._action_btn.setText(_format_broadcast_elapsed(elapsed))
 
     def _on_transmission_started(self) -> None:
+        cfg = load_settings()
+        rla = cfg.get("lat")
+        rln = cfg.get("lng")
+        try:
+            if rla is not None and rln is not None:
+                lat = float(rla)
+                lng = float(rln)
+            else:
+                raise ValueError
+        except (TypeError, ValueError):
+            lat = self._pending_lat if self._pending_lat is not None else 0.0
+            lng = self._pending_lng if self._pending_lng is not None else 0.0
+        raw_e = cfg.get("elevation_m")
+        try:
+            elev = float(raw_e) if raw_e is not None else 0.0
+        except (TypeError, ValueError):
+            elev = 0.0
+        record_transmission(lat, lng, elev)
+        if self._history_panel.isVisible():
+            self._populate_history_list()
+
         self._set_map_click_blocked(True)
         self._apply_action_button_style_tx()
         self._tx_start_monotonic = time.monotonic()
@@ -566,15 +670,15 @@ class MainWindow(QMainWindow):
     def _refresh_hint_initial(self) -> None:
         cfg = self._cfg
         if not _has_saved_coordinates(cfg):
-            self._hint_label.setText("Нажми на карту для выбора точки")
+            self._location_btn.setText("Нажми на карту для выбора точки")
         else:
             lat = float(cfg["lat"])
             lng = float(cfg["lng"])
             em = cfg.get("elevation_m")
             if em is not None:
-                self._hint_label.setText(_hint_text_coords_elevation(lat, lng, float(em)))
+                self._location_btn.setText(_hint_text_coords_elevation(lat, lng, float(em)))
             else:
-                self._hint_label.setText(f"{lat:.6f}, {lng:.6f}\nвысота: —")
+                self._location_btn.setText(f"{lat:.6f}, {lng:.6f}\nвысота: —")
         self._update_recenter_button_state()
 
     def _on_map_click(self, lat: float, lng: float) -> None:
@@ -584,7 +688,7 @@ class MainWindow(QMainWindow):
         self._fetch_seq += 1
         seq = self._fetch_seq
 
-        self._hint_label.setText(f"{lat:.6f}, {lng:.6f}\nопределение высоты...")
+        self._location_btn.setText(f"{lat:.6f}, {lng:.6f}\nопределение высоты...")
         self._append_log(f"[высота] выбор точки #{seq}: {lat:.6f}, {lng:.6f}\n")
 
         if self._worker is None or not self._worker.isRunning():
@@ -599,14 +703,14 @@ class MainWindow(QMainWindow):
                 return
             self._cfg = load_settings()
             self._lat, self._lng = la, ln
-            self._hint_label.setText(_hint_text_coords_elevation(la, ln, elev))
+            self._location_btn.setText(_hint_text_coords_elevation(la, ln, elev))
             if self._worker is None or not self._worker.isRunning():
                 self._sync_start_button_enabled()
 
         def on_fail(msg: str) -> None:
             if seq != self._fetch_seq:
                 return
-            self._hint_label.setText(f"{lat:.6f}, {lng:.6f}\nошибка высоты: {msg}")
+            self._location_btn.setText(f"{lat:.6f}, {lng:.6f}\nошибка высоты: {msg}")
             if self._worker is None or not self._worker.isRunning():
                 self._sync_start_button_enabled()
             short = msg if len(msg) <= 500 else msg[:500] + "…"
@@ -665,7 +769,7 @@ class MainWindow(QMainWindow):
         if self._pending_lat is not None and self._pending_lng is not None:
             em = self._cfg.get("elevation_m")
             if em is not None:
-                self._hint_label.setText(
+                self._location_btn.setText(
                     _hint_text_coords_elevation(self._pending_lat, self._pending_lng, float(em)),
                 )
             else:

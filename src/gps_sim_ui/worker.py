@@ -10,7 +10,7 @@ from PySide6.QtCore import QThread, Signal
 
 from gps_sim.brdc_download import download_latest_broadcast_ephemeris, parse_ephemeris_updated_at
 from gps_sim.elevation import elevation_cache_valid, get_elevation_cached
-from gps_sim.run_sim import run_simulation
+from gps_sim.run_sim import format_simulation_params_log, run_simulation
 from gps_sim.settings import (
     DEFAULT_DURATION_MINUTES,
     broadcast_ephemeris_file,
@@ -93,6 +93,7 @@ class SimulationWorker(QThread):
                 return
 
             self.log_line.emit("Начало трансляции.\n")
+            self.log_line.emit(format_simulation_params_log(cfg))
             self.transmission_started.emit()
             rc = run_simulation(cfg, interactive=False, cancel_event=self._cancel)
             if rc == 0:

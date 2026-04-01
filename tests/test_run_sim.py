@@ -268,3 +268,26 @@ def test_try_resolve_bundled_saves_settings(tmp_path, monkeypatch) -> None:
     assert out == str(fake_bin.resolve())
     assert cfg.get("gps_sdr_sim_path") == str(fake_bin.resolve())
     assert settings_path.is_file()
+
+
+def test_format_simulation_params_log(tmp_path) -> None:
+    nav = _BRDC_FIXTURE
+    fake_gps = tmp_path / "gps-sdr-sim"
+    fake_gps.write_bytes(b"#!/bin/sh\n")
+    fake_gps.chmod(0o755)
+    cfg = {
+        "lat": 55.0,
+        "lng": 37.0,
+        "elevation_m": 10.5,
+        "duration_minutes": 60,
+        "broadcast_ephemeris_path": str(nav),
+        "gps_sdr_sim_path": str(fake_gps),
+    }
+    text = run_sim.format_simulation_params_log(cfg)
+    assert str(nav) in text
+    assert "55.000000" in text
+    assert "37.000000" in text
+    assert "10.50" in text
+    assert "hackrf_transfer" in text
+    assert "gps-sdr-sim" in text
+    assert str(fake_gps.resolve()) in text

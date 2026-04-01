@@ -297,6 +297,74 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _gps_sdr_sim_path_for_log(cfg: dict[str, Any]) -> str:
+    """Путь к gps-sdr-sim для лога без sys.exit (как при неинтерактивном запуске)."""
+    raw = cfg.get("gps_sdr_sim_path")
+    if raw:
+        return str(Path(str(raw)).expanduser().resolve())
+    bundled = _bundled_gps_sdr_sim_path()
+    if bundled is not None:
+        return str(bundled.resolve())
+    which = shutil.which("gps-sdr-sim")
+    if which:
+        return which
+    return "не найден"
+
+
+def format_simulation_params_log(cfg: dict[str, Any]) -> str:
+    """
+    Многострочное описание параметров симуляции для UI-лога.
+    Согласовано с тем, что передаётся в gps-sdr-sim и hackrf_transfer в run_simulation.
+    """
+    lines: list[str] = []
+    nav = broadcast_ephemeris_file(cfg)
+    if nav is not None and nav.is_file():
+        lines.append(f"Эфемериды: {nav}")
+    else:
+        lines.append("Эфемериды: не заданы или файл отсутствует")
+
+    try:
+        lat = float(cfg["lat"])
+        lng = float(cfg["lng"])
+    except (KeyError, TypeError, ValueError):
+        lat, lng = 0.0, 0.0
+    alt = _coerce_float(cfg, "elevation_m", 0.0)
+    lines.append(f"Позиция: {lat:.6f}, {lng:.6f}; высота {alt:.2f} м")
+
+    duration_min = int(cfg.get("duration_minutes", DEFAULT_DURATION_MINUTES))
+    duration_sec = duration_min * 60
+    gain_val = _coerce_int(cfg, "hackrf_tx_gain", DEFAULT_HACKRF_TX_GAIN)
+    bits = _coerce_int(cfg, "sim_bits", DEFAULT_SIM_BITS)
+    sample_hz = _coerce_int(cfg, "sim_sample_rate_hz", DEFAULT_SIM_SAMPLE_RATE_HZ)
+    freq_hz = _coerce_int(cfg, "hackrf_freq_hz", DEFAULT_HACKRF_FREQ_HZ)
+    amp = _coerce_int(cfg, "hackrf_amp", DEFAULT_HACKRF_AMP)
+
+    utc_start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    utc_label = format_gps_sdr_sim_time(utc_start)
+    if nav is not None and nav.is_file():
+        try:
+            tmin, tmax = broadcast_nav_time_bounds(nav)
+            utc_start, _ = clamp_utc_start_to_nav_bounds(utc_start, tmin, tmax)
+            utc_label = format_gps_sdr_sim_time(utc_start)
+        except ValueError:
+            pass
+
+    lines.append(f"Длительность: {duration_min} мин ({duration_sec} с)")
+    lines.append(f"Время GPS для gps-sdr-sim (-t): {utc_label}")
+    lines.append(
+        f"gps-sdr-sim: -b {bits} -s {sample_hz} -d {duration_sec} -t {utc_label} "
+        f"(позиция -l как lat,lng,alt)"
+    )
+    lines.append(
+        f"hackrf_transfer: -f {freq_hz} -s {sample_hz} -a {amp} -x {gain_val}"
+    )
+    lines.append(f"Исполняемый файл gps-sdr-sim: {_gps_sdr_sim_path_for_log(cfg)}")
+    hackrf_w = _find_hackrf_transfer()
+    lines.append(f"hackrf_transfer: {hackrf_w or 'не найден в PATH'}")
+
+    return "\n".join(lines) + "\n"
+
+
 def run_simulation(
     cfg: dict[str, Any],
     *,
