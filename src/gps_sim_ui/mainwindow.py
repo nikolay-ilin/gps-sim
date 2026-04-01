@@ -22,13 +22,20 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QStyle,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from gps_sim.brdc_download import parse_ephemeris_updated_at
-from gps_sim.history import format_history_entry_label, record_transmission, sorted_history_entries
+from gps_sim.history import (
+    format_history_entry_label,
+    record_transmission,
+    remove_history_entry_at_coords,
+    sorted_history_entries,
+)
 from gps_sim.run_sim import _bundled_gps_sdr_sim_path, _is_executable_file
 from gps_sim.settings import broadcast_ephemeris_file, load_settings, save_settings
 from gps_sim_ui.brdc_thread import BrdcFetchThread
@@ -372,7 +379,7 @@ class MainWindow(QMainWindow):
 
         self._location_btn = QPushButton()
         self._location_btn.setStyleSheet(_EPHEM_BTN_STYLE)
-        self._location_btn.setFixedWidth(150)
+        self._location_btn.setFixedWidth(180)
         self._location_btn.setToolTip("Текущая точка; открыть историю локаций")
         self._location_btn.clicked.connect(self._on_location_btn_clicked)
 
@@ -429,7 +436,6 @@ class MainWindow(QMainWindow):
         self._history_list.setStyleSheet(
             "QListWidget::item { margin-bottom: 10px; }",
         )
-        self._history_list.itemClicked.connect(self._on_history_item_clicked)
         hist_lay.addWidget(self._history_list, stretch=1)
 
         self._left_panel = QWidget()
@@ -451,7 +457,7 @@ class MainWindow(QMainWindow):
 
     def _apply_logs_panel_visibility(self) -> None:
         self._log.setVisible(self._show_logs_panel)
-        self._toggle_logs_btn.setText("<" if self._show_logs_panel else ">")
+        self._toggle_logs_btn.setText(">" if self._show_logs_panel else "<")
         self._toggle_logs_btn.setToolTip(
             "Скрыть панель журнала" if self._show_logs_panel else "Показать панель журнала справа",
         )
@@ -473,6 +479,7 @@ class MainWindow(QMainWindow):
 
     def _populate_history_list(self) -> None:
         self._history_list.clear()
+        trash_icon = self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon)
         for entry in sorted_history_entries():
             try:
                 lat = float(entry["lat"])
@@ -480,21 +487,40 @@ class MainWindow(QMainWindow):
                 elev = float(entry.get("elevation_m", 0.0))
             except (KeyError, TypeError, ValueError):
                 continue
-            item = QListWidgetItem(format_history_entry_label(entry))
-            item.setData(Qt.ItemDataRole.UserRole, {"lat": lat, "lng": lng, "elevation_m": elev})
+            row = QWidget()
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(2, 2, 2, 2)
+            row_lay.setSpacing(4)
+            pick_btn = QPushButton(format_history_entry_label(entry))
+            pick_btn.setFlat(True)
+            pick_btn.setStyleSheet(
+                "QPushButton { text-align: left; padding: 4px 2px; border: none; "
+                "background: transparent; }"
+                "QPushButton:hover { background: palette(alternate-base); }"
+                "QPushButton:pressed { background: palette(midlight); }"
+            )
+            pick_btn.clicked.connect(
+                lambda _c=False, la=lat, ln=lng, el=elev: self._apply_history_entry(la, ln, el),
+            )
+            row_lay.addWidget(pick_btn, stretch=1)
+            del_btn = QToolButton()
+            del_btn.setIcon(trash_icon)
+            del_btn.setToolTip("Удалить из истории")
+            del_btn.setAutoRaise(True)
+            del_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            del_btn.clicked.connect(
+                lambda _c=False, la=lat, ln=lng: self._on_history_delete_clicked(la, ln),
+            )
+            row_lay.addWidget(del_btn, stretch=0)
+            item = QListWidgetItem()
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self._history_list.addItem(item)
+            self._history_list.setItemWidget(item, row)
+            item.setSizeHint(row.sizeHint() + QSize(0, 8))
 
-    def _on_history_item_clicked(self, item: QListWidgetItem) -> None:
-        data = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(data, dict):
-            return
-        try:
-            lat = float(data["lat"])
-            lng = float(data["lng"])
-            elev = float(data["elevation_m"])
-        except (KeyError, TypeError, ValueError):
-            return
-        self._apply_history_entry(lat, lng, elev)
+    def _on_history_delete_clicked(self, lat: float, lng: float) -> None:
+        remove_history_entry_at_coords(lat, lng)
+        self._populate_history_list()
 
     def _apply_history_entry(self, lat: float, lng: float, elev_m: float) -> None:
         cfg = load_settings()

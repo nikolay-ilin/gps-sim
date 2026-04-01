@@ -32,6 +32,27 @@ def test_same_coords_updates_time_not_duplicate(tmp_path, monkeypatch) -> None:
     assert entries[0]["started_at"] == expected_iso
 
 
+def test_remove_history_entry_at_coords(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(h, "history_path", lambda: tmp_path / "history.json")
+
+    h.record_transmission(1.0, 2.0, 10.0)
+    h.record_transmission(3.0, 4.0, 20.0)
+    assert len(h.load_history_entries()) == 2
+    assert h.remove_history_entry_at_coords(1.0, 2.0) is True
+    entries = h.load_history_entries()
+    assert len(entries) == 1
+    assert entries[0]["lat"] == 3.0
+    assert h.remove_history_entry_at_coords(1.0, 2.0) is False
+
+
+def test_remove_matches_coord_key_like_record(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(h, "history_path", lambda: tmp_path / "history.json")
+
+    h.record_transmission(55.751244, 37.618423, 100.0)
+    assert h.remove_history_entry_at_coords(55.7512440001, 37.6184230002) is True
+    assert h.load_history_entries() == []
+
+
 def test_sorted_newest_first(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(h, "history_path", lambda: tmp_path / "history.json")
 

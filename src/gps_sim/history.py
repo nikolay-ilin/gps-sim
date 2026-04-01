@@ -96,6 +96,30 @@ def record_transmission(
     save_history_entries(entries)
 
 
+def remove_history_entry_at_coords(lat: float, lng: float) -> bool:
+    """
+    Удаляет из истории все записи с тем же ключом координат, что и у record_transmission (6 знаков).
+    Возвращает True, если что-то удалено.
+    """
+    key = _coord_key(lat, lng)
+    entries = load_history_entries()
+    kept: list[dict[str, Any]] = []
+    removed = False
+    for e in entries:
+        elat = _as_float(e.get("lat"))
+        elng = _as_float(e.get("lng"))
+        if elat is None or elng is None:
+            kept.append(e)
+            continue
+        if _coord_key(elat, elng) == key:
+            removed = True
+            continue
+        kept.append(e)
+    if removed:
+        save_history_entries(kept)
+    return removed
+
+
 def sorted_history_entries(entries: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """По убыванию времени запуска (новые сверху)."""
     if entries is None:
