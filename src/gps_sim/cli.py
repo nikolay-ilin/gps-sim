@@ -262,7 +262,7 @@ def main(argv: list[str] | None = None) -> None:
         save_settings(cfg)
 
     if not args.skip_run:
-        print("[*] Данные обновлены, запуск симуляции и передачи...")
+        print("----------------")
         rc = run_simulation(cfg, duration_minutes=None, gain=None, interactive=interactive)
         if rc != 0:
             sys.exit(rc)

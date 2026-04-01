@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import shlex
+import platform
 import shutil
 import subprocess
 import sys
@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from gps_sim import __version__
+from gps_sim.rinex_nav import (
+    broadcast_nav_time_bounds,
+    clamp_utc_start_to_nav_bounds,
+    format_gps_sdr_sim_time,
+)
 from gps_sim.settings import (
     DEFAULT_DURATION_MINUTES,
     DEFAULT_HACKRF_AMP,
@@ -62,12 +67,50 @@ def _find_hackrf_transfer() -> str | None:
     return shutil.which("hackrf_transfer")
 
 
+def _bundled_gps_sdr_sim_filename() -> str | None:
+    """Имя встроенного бинарника для текущей ОС/архитектуры или None (остальные платформы)."""
+    machine = platform.machine().lower()
+    if sys.platform == "darwin" and machine in ("arm64", "aarch64"):
+        return "gps-sdr-sim-macos-apple"
+    if sys.platform == "linux" and machine in ("aarch64", "arm64"):
+        return "gps-sdr-sim-debian-arm64"
+    return None
+
+
+def _bundled_gps_sdr_sim_path() -> Path | None:
+    """Путь к встроенному бинарнику в пакете, если он есть и исполняемый."""
+    name = _bundled_gps_sdr_sim_filename()
+    if name is None:
+        return None
+    p = Path(__file__).resolve().parent / "bin" / name
+    if _is_executable_file(p):
+        return p
+    return None
+
+
+def _try_resolve_bundled_gps_sdr_sim(cfg: dict[str, Any]) -> str | None:
+    """Подставляет встроенный gps-sdr-sim и при необходимости сохраняет путь в настройки."""
+    p = _bundled_gps_sdr_sim_path()
+    if p is None:
+        return None
+    resolved = str(p.resolve())
+    if cfg.get("gps_sdr_sim_path") != resolved:
+        cfg["gps_sdr_sim_path"] = resolved
+        save_settings(cfg)
+        print(f"В настройки сохранён путь к встроенному gps-sdr-sim: {resolved}")
+    return resolved
+
+
 def _resolve_gps_sdr_sim_path(cfg: dict[str, Any], *, interactive: bool) -> str:
     raw = cfg.get("gps_sdr_sim_path")
     if raw:
         p = Path(str(raw)).expanduser().resolve()
         if _is_executable_file(p):
             return str(p)
+
+    bundled = _try_resolve_bundled_gps_sdr_sim(cfg)
+    if bundled is not None:
+        return bundled
 
     which = shutil.which("gps-sdr-sim")
     if which:
@@ -224,7 +267,26 @@ def run_simulation(
     amp = _coerce_int(cfg, "hackrf_amp", DEFAULT_HACKRF_AMP)
 
     utc_start = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    utc_now = utc_start.strftime("%Y/%m/%d,%H:%M:%S")
+    try:
+        tmin, tmax = broadcast_nav_time_bounds(nav_path)
+        utc_start, clamped = clamp_utc_start_to_nav_bounds(utc_start, tmin, tmax)
+        if clamped:
+            a = format_gps_sdr_sim_time(utc_start)
+            lo = format_gps_sdr_sim_time(tmin)
+            hi = format_gps_sdr_sim_time(tmax)
+            print(
+                "Время старта вне окна эфемерид; используется ближайшее допустимое UTC: "
+                f"{a} (допустимо {lo} … {hi}).",
+                file=sys.stderr,
+            )
+    except ValueError as exc:
+        print(
+            f"Предупреждение: не удалось прочитать границы эфемерид ({exc}); "
+            "время старта не подгонялось.",
+            file=sys.stderr,
+        )
+
+    utc_now = format_gps_sdr_sim_time(utc_start)
 
     gps_cmd = [
         gps_bin,
@@ -257,10 +319,6 @@ def run_simulation(
         "-x",
         str(gain_val),
     ]
-
-    print(f"[*] Команда генерации данных: {shlex.join(gps_cmd)}")
-    print(f"[*] Команда трансляции: {shlex.join(hackrf_cmd)}")
-
     return run_pipeline(gps_cmd, hackrf_cmd)
 
 

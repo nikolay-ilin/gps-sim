@@ -2,11 +2,14 @@ import io
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from gps_sim import run_sim
 from gps_sim import settings as s
+
+_BRDC_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "brdc_minimal.n"
 
 
 def test_main_fails_without_hackrf(monkeypatch) -> None:
@@ -26,6 +29,7 @@ def test_main_fails_without_gps_noninteractive(tmp_path, monkeypatch) -> None:
         "broadcast_ephemeris_path": str(nav),
     }
     monkeypatch.setattr(run_sim, "load_settings", lambda: cfg)
+    monkeypatch.setattr(run_sim, "_bundled_gps_sdr_sim_path", lambda: None)
 
     def fake_which(name: str) -> str | None:
         if name == "hackrf_transfer":
@@ -41,8 +45,7 @@ def test_main_fails_without_gps_noninteractive(tmp_path, monkeypatch) -> None:
 
 
 def test_main_succeeds_with_mock_pipeline(tmp_path, monkeypatch) -> None:
-    nav = tmp_path / "nav.n"
-    nav.write_text("stub", encoding="utf-8")
+    nav = _BRDC_FIXTURE
     fake_gps = tmp_path / "gps-sdr-sim"
     fake_gps.write_bytes(b"#!/bin/sh\n")
     fake_gps.chmod(0o755)
@@ -69,6 +72,7 @@ def test_resolve_saves_path_interactive(tmp_path, monkeypatch) -> None:
     fake_gps.chmod(0o755)
 
     cfg: dict = {}
+    monkeypatch.setattr(run_sim, "_bundled_gps_sdr_sim_path", lambda: None)
     monkeypatch.setattr(run_sim.shutil, "which", lambda _name: None)
     monkeypatch.setattr(sys, "stdin", io.StringIO(f"{fake_gps}\n"))
 
@@ -174,3 +178,36 @@ def test_run_pipeline_nonzero_return(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     assert run_sim.run_pipeline(["true"], ["true"]) == 1
+
+
+def test_bundled_filename_apple_silicon(monkeypatch) -> None:
+    monkeypatch.setattr(run_sim.sys, "platform", "darwin")
+    monkeypatch.setattr(run_sim.platform, "machine", lambda: "arm64")
+    assert run_sim._bundled_gps_sdr_sim_filename() == "gps-sdr-sim-macos-apple"
+
+
+def test_bundled_filename_debian_arm64(monkeypatch) -> None:
+    monkeypatch.setattr(run_sim.sys, "platform", "linux")
+    monkeypatch.setattr(run_sim.platform, "machine", lambda: "aarch64")
+    assert run_sim._bundled_gps_sdr_sim_filename() == "gps-sdr-sim-debian-arm64"
+
+
+def test_bundled_filename_other_platform(monkeypatch) -> None:
+    monkeypatch.setattr(run_sim.sys, "platform", "win32")
+    assert run_sim._bundled_gps_sdr_sim_filename() is None
+
+
+def test_try_resolve_bundled_saves_settings(tmp_path, monkeypatch) -> None:
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(s, "settings_path", lambda: settings_path)
+    fake_bin = tmp_path / "gps-sdr-sim-macos-apple"
+    fake_bin.write_bytes(b"x")
+    fake_bin.chmod(0o755)
+    monkeypatch.setattr(run_sim, "_bundled_gps_sdr_sim_path", lambda: fake_bin)
+
+    cfg: dict[str, object] = {}
+    out = run_sim._try_resolve_bundled_gps_sdr_sim(cfg)
+
+    assert out == str(fake_bin.resolve())
+    assert cfg.get("gps_sdr_sim_path") == str(fake_bin.resolve())
+    assert settings_path.is_file()
