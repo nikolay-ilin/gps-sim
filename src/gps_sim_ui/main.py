@@ -5,6 +5,45 @@ from __future__ import annotations
 import sys
 
 
+def _webengine_failure_message(exc: BaseException) -> str:
+    lines = [
+        "Не удалось загрузить Qt WebEngine (PySide6.QtWebEngineWidgets).",
+        f"Причина: {exc!r}",
+        "",
+    ]
+    if "No module named" in str(exc) or "cannot import name" in str(exc):
+        lines.extend(
+            [
+                "Похоже, в установленном PySide6 нет модуля WebEngine для этой платформы.",
+                "Обновите пакет: pip install -U 'PySide6>=6.5'",
+                "",
+            ]
+        )
+    if sys.platform.startswith("linux"):
+        lines.extend(
+            [
+                "На Debian / Raspberry Pi OS движок WebEngine (Chromium) требует системные библиотеки.",
+                "Установите их и перезапустите приложение:",
+                "",
+                "  sudo apt update",
+                "  sudo apt install -y libnss3 libnspr4 libatk1.0-0 libdrm2 libgbm1 \\",
+                "    libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 \\",
+                "    libasound2 libfontconfig1 libfreetype6 libegl1 libopengl0",
+                "",
+                "Либо из корня репозитория: sudo ./scripts/install/linux-qtwebengine-runtime-deps.sh",
+                "",
+                "Затем в venv: pip install -U 'gps-sim[ui]'",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "Переустановите зависимости: pip install -U 'gps-sim[ui]'",
+            ]
+        )
+    return "\n".join(lines)
+
+
 def main() -> int:
     try:
         from PySide6.QtWidgets import QApplication
@@ -17,12 +56,8 @@ def main() -> int:
 
     try:
         from PySide6.QtWebEngineWidgets import QWebEngineView  # noqa: F401
-    except ImportError:
-        print(
-            "Требуется Qt WebEngine (часть PySide6 на вашей платформе). "
-            "Проверьте установку PySide6.",
-            file=sys.stderr,
-        )
+    except ImportError as exc:
+        print(_webengine_failure_message(exc), file=sys.stderr)
         return 1
 
     from gps_sim.settings import load_settings

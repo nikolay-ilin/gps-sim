@@ -127,6 +127,21 @@ source .venv/bin/activate
 pip install -e ".[dev,ui]"
 ```
 
+**Если `gps-sim-ui` сразу выходит с ошибкой про Qt WebEngine**
+
+Интерфейс с картой использует **Qt WebEngine** (внутри — Chromium). На Raspberry Pi OS из `pip` ставится PySide6, но для загрузки WebEngine нужны **системные** библиотеки (NSS, GBM, ALSA и т.д.). Установите их:
+
+```bash
+sudo apt update
+sudo apt install -y libnss3 libnspr4 libatk1.0-0 libdrm2 libgbm1 \
+  libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 \
+  libasound2 libfontconfig1 libfreetype6 libegl1 libopengl0
+```
+
+Или из корня репозитория: `sudo ./scripts/install/linux-qtwebengine-runtime-deps.sh`. Затем снова запустите `gps-sim-ui` (при необходимости: `pip install -U 'gps-sim[ui]'` в venv).
+
+Если в сообщении об ошибке указано **«No module named … WebEngine»**, обновите PySide6: `pip install -U 'PySide6>=6.5'`.
+
 **Создание ярлыка для запуска**
 
 Файл в каталоге **`~/.local/share/applications/`** добавляет программу в **меню приложений** (лупа / кнопка «Пуск»), но **не создаёт значок на рабочем столе**. Чтобы значок появился на столе, нужен отдельный `.desktop` в каталоге рабочего стола.
@@ -283,9 +298,11 @@ source .venv/bin/activate
 pip install -e ".[dev,ui]"
 ```
 
+При ошибке загрузки **Qt WebEngine** выполните `sudo ./scripts/install/linux-qtwebengine-runtime-deps.sh`.
+
 **Создание ярлыка для запуска**
 
-Как и на Raspberry Pi: запись в **`~/.local/share/applications/`** даёт пункт в **меню**, а не на столе. Шаблон: **`scripts/install/templates/gps-sim-ui.desktop.template`**.
+Запись в **`~/.local/share/applications/`** даёт пункт в **меню**, а не на столе. Шаблон: **`scripts/install/templates/gps-sim-ui.desktop.template`**.
 
 1. Путь к UI:
 

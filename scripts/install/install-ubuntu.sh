@@ -16,6 +16,10 @@ if command -v apt-get >/dev/null 2>&1; then
 	sudo apt-get update
 	sudo apt-get install -y python3-venv python3-pip git
 	sudo apt-get install -y hackrf || true
+	sudo apt-get install -y \
+		libnss3 libnspr4 libatk1.0-0 libdrm2 libgbm1 \
+		libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libxkbcommon0 \
+		libasound2 libfontconfig1 libfreetype6 libegl1 libopengl0
 else
 	echo "Ожидался apt (Ubuntu/Debian)." >&2
 	exit 1
