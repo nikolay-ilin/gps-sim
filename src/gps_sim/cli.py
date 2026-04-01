@@ -7,16 +7,17 @@ import getpass
 import json
 import sys
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from gps_sim import __version__
 from gps_sim import settings as settings_mod
-from gps_sim.brdc_download import download_latest_broadcast_ephemeris
+from gps_sim.brdc_download import download_latest_broadcast_ephemeris, parse_ephemeris_updated_at
 from gps_sim.elevation import get_elevation_cached
 from gps_sim.run_sim import run_simulation
 from gps_sim.settings import (
     DEFAULT_DURATION_MINUTES,
+    broadcast_ephemeris_file,
     ephemeris_dir,
     load_settings,
     save_settings,
@@ -78,6 +79,14 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--skip-run",
         action="store_true",
         help="после сохранения настроек и обновлений не запускать передачу (gps-sdr-sim → HackRF)",
+    )
+    parser.add_argument(
+        "--force-brdc",
+        action="store_true",
+        help=(
+            "принудительно загрузить BRDC с CDDIS, "
+            "не проверяя часовой интервал с последнего обновления"
+        ),
     )
     ns = parser.parse_args(argv)
     if (ns.lat is None) ^ (ns.lng is None):
@@ -239,13 +248,19 @@ def main(argv: list[str] | None = None) -> None:
     if not args.skip_ephemeris:
         try:
             year = args.brdc_year if args.brdc_year is not None else datetime.now().year
-            unpacked = download_latest_broadcast_ephemeris(
+            unpacked, did_download = download_latest_broadcast_ephemeris(
                 nasa_login,
                 nasa_pass,
                 ephemeris_dir(),
                 year=year,
+                force_update=args.force_brdc,
+                last_updated_at=parse_ephemeris_updated_at(cfg),
+                existing_unpacked_path=broadcast_ephemeris_file(cfg),
+                log=print,
             )
             cfg["broadcast_ephemeris_path"] = str(unpacked.resolve())
+            if did_download:
+                cfg["broadcast_ephemeris_updated_at"] = datetime.now(timezone.utc).isoformat()
             save_settings(cfg)
         except Exception as e:
             print(f"Ошибка обновления эфемерид: {e}", file=sys.stderr)

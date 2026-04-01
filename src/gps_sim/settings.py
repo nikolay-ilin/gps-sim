@@ -37,7 +37,13 @@ def ephemeris_dir() -> Path:
 
 
 def broadcast_ephemeris_file(cfg: dict[str, Any]) -> Path | None:
-    """Путь к последнему распакованному BRDC, если полный путь задан в настройках."""
+    """
+    Путь к последнему распакованному BRDC, если полный путь задан в настройках.
+
+    Связанные ключи JSON:
+    - broadcast_ephemeris_path — полный путь к распакованному .yyN;
+    - broadcast_ephemeris_updated_at — ISO 8601 (UTC) времени последнего успешного скачивания.
+    """
     raw = cfg.get("broadcast_ephemeris_path")
     if not raw:
         return None

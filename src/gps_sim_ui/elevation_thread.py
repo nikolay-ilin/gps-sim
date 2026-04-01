@@ -32,7 +32,7 @@ class ElevationFetchThread(QThread):
     def run(self) -> None:
         url = elevation_api_url(self._lat, self._lng)
         self.log_line.emit(
-            f"[высота #{self._seq}] точка {self._lat:.6f}, {self._lng:.6f}\n",
+            f"[ELEVATION #{self._seq}] точка {self._lat:.6f}, {self._lng:.6f}\n",
         )
         try:
             cfg = load_settings()
@@ -43,11 +43,11 @@ class ElevationFetchThread(QThread):
             cached = elevation_cache_valid(cfg, self._lat, self._lng)
             if cached:
                 self.log_line.emit(
-                    f"[высота #{self._seq}] кэш по координатам совпадает, "
+                    f"[ELEVATION #{self._seq}] кэш по координатам совпадает, "
                     "HTTP-запрос не выполняется\n",
                 )
             else:
-                self.log_line.emit(f"[высота #{self._seq}] запрос: GET {url}\n")
+                self.log_line.emit(f"[ELEVATION #{self._seq}] запрос: GET {url}\n")
 
             preview: list[str] = []
             elev = get_elevation_cached(
@@ -61,12 +61,12 @@ class ElevationFetchThread(QThread):
             if preview:
                 frag = preview[0].replace("\n", " ")
                 self.log_line.emit(
-                    f"[высота #{self._seq}] ответ (фрагмент): {frag!r}\n",
+                    f"[ELEVATION #{self._seq}] ответ (фрагмент): {frag!r}\n",
                 )
             self.log_line.emit(
-                f"[высота #{self._seq}] готово: высота {elev:.2f} м\n",
+                f"[ELEVATION #{self._seq}] готово: {elev:.2f} м\n",
             )
             self.elevation_ready.emit(self._lat, self._lng, elev)
         except Exception as e:
-            self.log_line.emit(f"[высота #{self._seq}] ошибка: {e}\n")
+            self.log_line.emit(f"[ELEVATION #{self._seq}] ошибка: {e}\n")
             self.failed.emit(str(e))

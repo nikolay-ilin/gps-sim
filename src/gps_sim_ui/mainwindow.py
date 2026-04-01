@@ -6,7 +6,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtGui import QCloseEvent, QTextCursor
+from PySide6.QtCore import QThread, QTimer
+from PySide6.QtGui import QCloseEvent, QShowEvent, QTextCursor
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -22,8 +23,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gps_sim.brdc_download import parse_ephemeris_updated_at
 from gps_sim.run_sim import _bundled_gps_sdr_sim_path, _is_executable_file
-from gps_sim.settings import load_settings, save_settings
+from gps_sim.settings import broadcast_ephemeris_file, load_settings, save_settings
+from gps_sim_ui.brdc_thread import BrdcFetchThread
 from gps_sim_ui.bridge import MapBridge
 from gps_sim_ui.elevation_thread import ElevationFetchThread
 from gps_sim_ui.worker import SimulationWorker
@@ -160,10 +163,27 @@ def _hint_text_coords_elevation(lat: float, lng: float, elev_m: float) -> str:
     return f"{lat:.6f}, {lng:.6f}\nвысота: {elev_m:.2f} м"
 
 
+def _short_filename(name: str, max_len: int = 26) -> str:
+    if len(name) <= max_len:
+        return name
+    return name[: max_len - 1] + "…"
+
+
+def _safe_wait_thread(thread: QThread | None, ms: int) -> None:
+    """Ожидание QThread без обращения к уже удалённому QObject (deleteLater)."""
+    if thread is None:
+        return
+    try:
+        if thread.isRunning():
+            thread.wait(ms)
+    except RuntimeError:
+        pass
+
+
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("gps-sim-ui")
+        self.setWindowTitle("GPS Simulation")
         self.resize(900, 700)
 
         self._cfg = load_settings()
@@ -175,6 +195,9 @@ class MainWindow(QMainWindow):
             self._pending_lng = self._lng
         self._worker: SimulationWorker | None = None
         self._elev_thread: ElevationFetchThread | None = None
+        self._brdc_thread: BrdcFetchThread | None = None
+        self._brdc_user_initiated = False
+        self._brdc_startup_scheduled = False
         self._fetch_seq = 0
 
         self._view = QWebEngineView()
@@ -192,8 +215,13 @@ class MainWindow(QMainWindow):
         self._view.setHtml(html)
 
         self._action_btn = QPushButton("Start")
-        self._action_btn.setEnabled(self._pending_lat is not None and self._pending_lng is not None)
         self._action_btn.clicked.connect(self._on_action)
+
+        self._ephem_btn = QPushButton()
+        self._ephem_btn.setStyleSheet("QPushButton { border-radius: 4px; }")
+        self._ephem_btn.setToolTip("Обновить файл broadcast-эфемерид BRDC с CDDIS (принудительно)")
+        self._ephem_btn.clicked.connect(self._on_ephem_clicked)
+        self._refresh_ephem_button()
 
         self._hint_label = QLabel()
         self._hint_label.setWordWrap(True)
@@ -208,7 +236,10 @@ class MainWindow(QMainWindow):
         bar = QHBoxLayout()
         bar.addWidget(self._recenter_btn)
         bar.addWidget(self._hint_label, stretch=1)
-        bar.addWidget(self._action_btn)
+        actions = QHBoxLayout()
+        actions.addWidget(self._action_btn)
+        actions.addWidget(self._ephem_btn)
+        bar.addLayout(actions)
 
         self._log = QTextEdit()
         self._log.setReadOnly(True)
@@ -227,6 +258,97 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._log)
         self.setCentralWidget(central)
 
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        if self._brdc_startup_scheduled:
+            return
+        self._brdc_startup_scheduled = True
+        QTimer.singleShot(0, self._schedule_startup_brdc)
+
+    def _has_nasa_credentials(self) -> bool:
+        cfg = load_settings()
+        return bool((cfg.get("nasa_login") or "").strip() and (cfg.get("nasa_pass") or "").strip())
+
+    def _sync_start_button_enabled(self) -> None:
+        """Кнопка Start: только при выбранной точке и без запроса высоты / обновления BRDC."""
+        if self._worker is not None and self._worker.isRunning():
+            return
+        brdc_busy = self._brdc_thread is not None and self._brdc_thread.isRunning()
+        elev_busy = self._elev_thread is not None and self._elev_thread.isRunning()
+        pending_ok = self._pending_lat is not None and self._pending_lng is not None
+        self._action_btn.setEnabled(pending_ok and not brdc_busy and not elev_busy)
+
+    def _refresh_ephem_button(self) -> None:
+        busy_worker = self._worker is not None and self._worker.isRunning()
+        busy_brdc = self._brdc_thread is not None and self._brdc_thread.isRunning()
+        if busy_brdc:
+            self._ephem_btn.setText("Обновление...")
+            self._ephem_btn.setEnabled(
+                self._has_nasa_credentials() and not busy_worker and not busy_brdc,
+            )
+            self._sync_start_button_enabled()
+            return
+
+        cfg = load_settings()
+        self._cfg = cfg
+        p = broadcast_ephemeris_file(cfg)
+        if p is None or not p.is_file():
+            text = "Нет файла BRDC\nнажмите для загрузки"
+        else:
+            nm = _short_filename(p.name)
+            dt = parse_ephemeris_updated_at(cfg)
+            if dt is None:
+                sub = "время обновления неизвестно"
+            else:
+                local = dt.astimezone()
+                sub = f"{local.strftime('%Y-%m-%d %H:%M')}"
+            text = f"{nm}\n{sub}"
+        self._ephem_btn.setText(text)
+        self._ephem_btn.setEnabled(
+            self._has_nasa_credentials() and not busy_worker and not busy_brdc,
+        )
+        self._sync_start_button_enabled()
+
+    def _schedule_startup_brdc(self) -> None:
+        if not self._has_nasa_credentials():
+            return
+        self._brdc_user_initiated = False
+        self._start_brdc_thread(force_update=False)
+
+    def _on_ephem_clicked(self) -> None:
+        if not self._has_nasa_credentials():
+            QMessageBox.information(
+                self,
+                "Эфемериды BRDC",
+                "Укажите логин и пароль NASA Earthdata в настройках.",
+            )
+            return
+        self._brdc_user_initiated = True
+        self._start_brdc_thread(force_update=True)
+
+    def _start_brdc_thread(self, force_update: bool) -> None:
+        if self._brdc_thread is not None and self._brdc_thread.isRunning():
+            return
+        self._ephem_btn.setText("Обновление...")
+        self._ephem_btn.setEnabled(False)
+        t = BrdcFetchThread(force_update)
+        self._brdc_thread = t
+        t.log_line.connect(self._append_log)
+        t.failed.connect(self._on_brdc_failed)
+        t.finished.connect(self._on_brdc_thread_finished)
+        t.start()
+        self._sync_start_button_enabled()
+
+    def _on_brdc_failed(self, msg: str) -> None:
+        self._append_log(f"[BRDC] Ошибка: {msg}\n")
+        if self._brdc_user_initiated:
+            QMessageBox.warning(self, "Эфемериды BRDC", msg)
+
+    def _on_brdc_thread_finished(self) -> None:
+        self._brdc_thread = None
+        self._cfg = load_settings()
+        self._refresh_ephem_button()
+
     def _set_map_click_blocked(self, blocked: bool) -> None:
         """Синхронизация с JS: разрешить/запретить следующий клик по карте."""
         b = "true" if blocked else "false"
@@ -239,6 +361,10 @@ class MainWindow(QMainWindow):
         if t.request_seq != self._fetch_seq:
             return
         self._set_map_click_blocked(False)
+
+    def _clear_elev_thread_ref(self, t: ElevationFetchThread) -> None:
+        if self._elev_thread is t:
+            self._elev_thread = None
 
     def _update_recenter_button_state(self) -> None:
         ok = self._pending_lat is not None and self._pending_lng is not None
@@ -280,7 +406,6 @@ class MainWindow(QMainWindow):
 
         if self._worker is None or not self._worker.isRunning():
             self._action_btn.setText("Start")
-            self._action_btn.setEnabled(False)
 
         t = ElevationFetchThread(lat, lng, seq)
         self._elev_thread = t
@@ -293,14 +418,14 @@ class MainWindow(QMainWindow):
             self._lat, self._lng = la, ln
             self._hint_label.setText(_hint_text_coords_elevation(la, ln, elev))
             if self._worker is None or not self._worker.isRunning():
-                self._action_btn.setEnabled(True)
+                self._sync_start_button_enabled()
 
         def on_fail(msg: str) -> None:
             if seq != self._fetch_seq:
                 return
             self._hint_label.setText(f"{lat:.6f}, {lng:.6f}\nошибка высоты: {msg}")
             if self._worker is None or not self._worker.isRunning():
-                self._action_btn.setEnabled(True)
+                self._sync_start_button_enabled()
             short = msg if len(msg) <= 500 else msg[:500] + "…"
             QMessageBox.warning(
                 self,
@@ -311,12 +436,14 @@ class MainWindow(QMainWindow):
         t.elevation_ready.connect(on_ready)
         t.failed.connect(on_fail)
         t.finished.connect(lambda tt=t: self._on_elev_fetch_finished(tt))
+        t.finished.connect(lambda tt=t: self._clear_elev_thread_ref(tt))
         t.finished.connect(t.deleteLater)
         try:
             t.start()
         except Exception:
             self._set_map_click_blocked(False)
             raise
+        self._sync_start_button_enabled()
 
     def _on_action(self) -> None:
         if self._worker is not None and self._worker.isRunning():
@@ -332,6 +459,7 @@ class MainWindow(QMainWindow):
         self._worker.log_line.connect(self._append_log)
         self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
+        self._refresh_ephem_button()
 
     def _append_log(self, text: str) -> None:
         self._log.moveCursor(QTextCursor.MoveOperation.End)
@@ -341,7 +469,6 @@ class MainWindow(QMainWindow):
     def _on_worker_finished(self, _code: int) -> None:
         self._worker = None
         self._action_btn.setText("Start")
-        self._action_btn.setEnabled(self._pending_lat is not None and self._pending_lng is not None)
         self._cfg = load_settings()
         self._lat, self._lng = _default_lat_lng(self._cfg)
         if self._pending_lat is not None and self._pending_lng is not None:
@@ -355,13 +482,15 @@ class MainWindow(QMainWindow):
         else:
             self._refresh_hint_initial()
         self._update_recenter_button_state()
+        self._refresh_ephem_button()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._worker is not None and self._worker.isRunning():
             self._worker.request_stop()
             self._worker.wait(300_000)
         self._worker = None
-        if self._elev_thread is not None and self._elev_thread.isRunning():
-            self._elev_thread.wait(5_000)
+        _safe_wait_thread(self._elev_thread, 5_000)
         self._elev_thread = None
+        _safe_wait_thread(self._brdc_thread, 5_000)
+        self._brdc_thread = None
         event.accept()
