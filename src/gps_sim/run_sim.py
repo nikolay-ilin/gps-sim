@@ -6,6 +6,7 @@ import argparse
 import os
 import platform
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -125,6 +126,44 @@ def _bundled_gps_sdr_sim_filename() -> str | None:
     return None
 
 
+def _ensure_bundled_executable(p: Path) -> bool:
+    """
+    Встроенный бинарник в пакете: если не исполняемый — сразу chmod и повторная проверка
+    (часто после git clone без бита исполнения).
+    """
+    if not p.is_file():
+        return False
+    if os.name == "nt":
+        return True
+    if _is_executable_file(p):
+        return True
+
+    st_mode = p.stat().st_mode
+    for mode in (
+        st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
+        0o755,
+    ):
+        try:
+            os.chmod(p, mode)
+        except OSError as exc:
+            _gps_sdr_sim_debug(f"chmod {oct(mode)}: {p} — {exc}")
+            continue
+        if _is_executable_file(p):
+            _gps_sdr_sim_debug(f"встроенный бинарник исполняемый после chmod: {p}")
+            print(
+                f"Встроенному gps-sdr-sim выставлены права на исполнение: {p}",
+                file=sys.stderr,
+            )
+            return True
+
+    print(
+        f"Встроенный gps-sdr-sim найден, но не исполняемый: {p}. "
+        "Проверьте права, владельца файла и монтирование (noexec).",
+        file=sys.stderr,
+    )
+    return False
+
+
 def _bundled_gps_sdr_sim_path() -> Path | None:
     """Путь к встроенному бинарнику в пакете, если он есть и исполняемый."""
     name = _bundled_gps_sdr_sim_filename()
@@ -132,18 +171,13 @@ def _bundled_gps_sdr_sim_path() -> Path | None:
         return None
     p = Path(__file__).resolve().parent / "bin" / name
     _gps_sdr_sim_debug(f"ожидаемый встроенный бинарник: {p}")
-    if p.is_file() and not os.access(p, os.X_OK):
-        print(
-            f"Встроенный gps-sdr-sim найден, но не исполняемый: {p}. "
-            "Выполните: chmod +x <путь> или переустановите пакет.",
-            file=sys.stderr,
-        )
     if not p.is_file():
         _gps_sdr_sim_debug(
             "файл отсутствует (часто при pip install -e без бинарника в дереве исходников "
             "или неполной установке wheel)"
         )
-    if _is_executable_file(p):
+        return None
+    if _ensure_bundled_executable(p):
         return p
     return None
 
