@@ -18,10 +18,12 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QCheckBox,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QStyle,
     QTextEdit,
     QToolButton,
@@ -41,7 +43,14 @@ from gps_sim.run_sim import (
     _gps_sdr_sim_debug,
     _is_executable_file,
 )
-from gps_sim.settings import broadcast_ephemeris_file, load_settings, save_settings
+from gps_sim.settings import (
+    DEFAULT_DURATION_MINUTES,
+    DEFAULT_HACKRF_AMP,
+    DEFAULT_HACKRF_TX_GAIN,
+    broadcast_ephemeris_file,
+    load_settings,
+    save_settings,
+)
 from gps_sim_ui.brdc_thread import BrdcFetchThread
 from gps_sim_ui.bridge import MapBridge
 from gps_sim_ui.elevation_thread import ElevationFetchThread
@@ -356,6 +365,21 @@ _LOG_TEXT_STYLE = (
     "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
 )
 
+_LOG_PARAMS_STYLE = (
+    f"QWidget#LogSimParams {{ background-color: {_UI_PANEL_BLACK}; color: {_UI_TEXT_ON_DARK}; "
+    "border: none; border-bottom: 1px solid #333333; }}"
+    f"QLabel {{ color: {_UI_TEXT_ON_DARK}; background: transparent; }}"
+    "QSpinBox {"
+    f"  background-color: #2a2a2a; color: {_UI_TEXT_ON_DARK};"
+    "  border: 1px solid #555555; border-radius: 3px;"
+    "  padding: 2px 6px; min-height: 22px;"
+    "}"
+    "QSpinBox:hover { border: 1px solid #707070; }"
+    "QSpinBox::up-button, QSpinBox::down-button { width: 16px; }"
+    f"QCheckBox {{ color: {_UI_TEXT_ON_DARK}; spacing: 6px; }}"
+    "QCheckBox::indicator { width: 18px; height: 18px; }"
+)
+
 _HISTORY_LIST_STYLE = (
     f"QListWidget {{ background-color: {_UI_PANEL_BLACK}; color: {_UI_TEXT_ON_DARK}; "
     "border: none; }"
@@ -496,6 +520,47 @@ class MainWindow(QMainWindow):
         self._log.setMinimumWidth(200)
         self._log.setStyleSheet(_LOG_TEXT_STYLE)
 
+        self._log_params_panel = QWidget()
+        self._log_params_panel.setObjectName("LogSimParams")
+        self._log_params_panel.setStyleSheet(_LOG_PARAMS_STYLE)
+        pr = QHBoxLayout(self._log_params_panel)
+        pr.setContentsMargins(8, 8, 8, 8)
+        pr.setSpacing(6)
+
+        la = QLabel("TX(0-47):")
+        la.setToolTip("hackrf_tx_gain (параметр −x у hackrf_transfer)")
+        self._spin_hackrf_tx_gain = QSpinBox()
+        self._spin_hackrf_tx_gain.setRange(0, 47)
+        self._spin_hackrf_tx_gain.setFixedWidth(52)
+        self._spin_hackrf_tx_gain.valueChanged.connect(self._on_hackrf_tx_gain_spin_changed)
+
+        self._chk_hackrf_amp = QCheckBox("AMP, ")
+        self._chk_hackrf_amp.setToolTip("hackrf_amp: 1 — включено, 0 — выключено (параметр −a у hackrf_transfer)")
+        self._chk_hackrf_amp.toggled.connect(self._on_hackrf_amp_toggled)
+
+        lt = QLabel("Длительность (мин):")
+        lt.setToolTip("duration_minutes — длительность трансляции")
+        self._spin_duration_minutes = QSpinBox()
+        self._spin_duration_minutes.setRange(1, 525_600)
+        self._spin_duration_minutes.setFixedWidth(72)
+        self._spin_duration_minutes.valueChanged.connect(self._on_duration_minutes_spin_changed)
+
+        pr.addWidget(self._chk_hackrf_amp)
+        pr.addSpacing(4)
+        pr.addWidget(la)
+        pr.addWidget(self._spin_hackrf_tx_gain)
+        pr.addSpacing(4)
+        pr.addWidget(lt)
+        pr.addWidget(self._spin_duration_minutes)
+        pr.addStretch(1)
+
+        self._logs_wrap = QWidget()
+        lw = QVBoxLayout(self._logs_wrap)
+        lw.setContentsMargins(0, 0, 0, 0)
+        lw.setSpacing(0)
+        lw.addWidget(self._log_params_panel)
+        lw.addWidget(self._log, stretch=1)
+
         self._bar_wrap = QWidget()
         self._bar_wrap.setObjectName("BottomBar")
         self._bar_wrap.setStyleSheet(_BOTTOM_BAR_WRAP_STYLE)
@@ -529,20 +594,64 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.addWidget(self._history_panel, 0)
         root.addWidget(self._left_panel, stretch=1)
-        root.addWidget(self._log, stretch=1)
+        root.addWidget(self._logs_wrap, stretch=1)
         self.setCentralWidget(central)
 
+        self._sync_sim_params_spinboxes_from_cfg()
         self._apply_logs_panel_visibility()
         self._apply_history_panel_button_appearance()
         self._apply_autostart_button_appearance()
         self._apply_fullscreen_button_appearance()
 
     def _apply_logs_panel_visibility(self) -> None:
-        self._log.setVisible(self._show_logs_panel)
+        self._logs_wrap.setVisible(self._show_logs_panel)
         self._toggle_logs_btn.setText(">" if self._show_logs_panel else "<")
         self._toggle_logs_btn.setToolTip(
             "Скрыть панель журнала" if self._show_logs_panel else "Показать панель журнала справа",
         )
+
+    def _sync_sim_params_spinboxes_from_cfg(self, cfg: dict[str, Any] | None = None) -> None:
+        if cfg is None:
+            cfg = load_settings()
+        self._cfg = cfg
+
+        def ci(key: str, default: int) -> int:
+            try:
+                return int(cfg.get(key, default))
+            except (TypeError, ValueError):
+                return default
+
+        g = max(0, min(47, ci("hackrf_tx_gain", DEFAULT_HACKRF_TX_GAIN)))
+        amp_on = ci("hackrf_amp", DEFAULT_HACKRF_AMP) != 0
+        d = max(1, min(525_600, ci("duration_minutes", DEFAULT_DURATION_MINUTES)))
+
+        self._spin_hackrf_tx_gain.blockSignals(True)
+        self._spin_hackrf_tx_gain.setValue(g)
+        self._spin_hackrf_tx_gain.blockSignals(False)
+        self._chk_hackrf_amp.blockSignals(True)
+        self._chk_hackrf_amp.setChecked(amp_on)
+        self._chk_hackrf_amp.blockSignals(False)
+        self._spin_duration_minutes.blockSignals(True)
+        self._spin_duration_minutes.setValue(d)
+        self._spin_duration_minutes.blockSignals(False)
+
+    def _on_hackrf_tx_gain_spin_changed(self, value: int) -> None:
+        cfg = load_settings()
+        cfg["hackrf_tx_gain"] = value
+        save_settings(cfg)
+        self._cfg = cfg
+
+    def _on_hackrf_amp_toggled(self, checked: bool) -> None:
+        cfg = load_settings()
+        cfg["hackrf_amp"] = 1 if checked else 0
+        save_settings(cfg)
+        self._cfg = cfg
+
+    def _on_duration_minutes_spin_changed(self, value: int) -> None:
+        cfg = load_settings()
+        cfg["duration_minutes"] = value
+        save_settings(cfg)
+        self._cfg = cfg
 
     def _on_toggle_logs_panel(self) -> None:
         self._show_logs_panel = not self._show_logs_panel
@@ -1023,6 +1132,7 @@ class MainWindow(QMainWindow):
         self._action_btn.setText("Start")
         self._apply_action_button_style_idle()
         self._cfg = load_settings()
+        self._sync_sim_params_spinboxes_from_cfg(self._cfg)
         self._lat, self._lng = _default_lat_lng(self._cfg)
         if self._pending_lat is not None and self._pending_lng is not None:
             em = self._cfg.get("elevation_m")
