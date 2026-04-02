@@ -406,6 +406,7 @@ class MainWindow(QMainWindow):
         self._fullscreen_persist_enabled = False
         self._autostart_startup_done = False
         self._autostart_elev_retries = 0
+        self._restart_transmission_after_stop = False
 
         self._view = QWebEngineView()
         s = self._view.settings()
@@ -801,7 +802,6 @@ class MainWindow(QMainWindow):
         if self._history_panel.isVisible():
             self._populate_history_list()
 
-        self._set_map_click_blocked(True)
         self._apply_action_button_style_tx()
         self._tx_start_monotonic = time.monotonic()
         if self._broadcast_elapsed_timer is None:
@@ -950,6 +950,16 @@ class MainWindow(QMainWindow):
             self._cfg = load_settings()
             self._lat, self._lng = la, ln
             self._location_btn.setText(_hint_text_coords_elevation(la, ln, elev))
+            tx_running = self._worker is not None and self._worker.isRunning()
+            if tx_running:
+                self._append_log(
+                    "[трансляция] новая точка: останавливаемся и запускаем с новыми координатами.\n",
+                )
+                self._pending_lat = la
+                self._pending_lng = ln
+                self._restart_transmission_after_stop = True
+                self._worker.request_stop()
+                return
             if self._worker is None or not self._worker.isRunning():
                 self._sync_start_button_enabled()
 
@@ -1002,6 +1012,8 @@ class MainWindow(QMainWindow):
         self._log.moveCursor(QTextCursor.MoveOperation.End)
 
     def _on_worker_finished(self, _code: int) -> None:
+        restart = self._restart_transmission_after_stop
+        self._restart_transmission_after_stop = False
         w = self._worker
         self._worker = None
         if w is not None:
@@ -1023,8 +1035,20 @@ class MainWindow(QMainWindow):
         else:
             self._refresh_hint_initial()
         self._refresh_ephem_button()
+        if restart:
+            QTimer.singleShot(0, self, self._restart_transmission_after_reposition)
+
+    def _restart_transmission_after_reposition(self) -> None:
+        if not self.isVisible():
+            return
+        if self._pending_lat is None or self._pending_lng is None:
+            return
+        if self._worker is not None and self._worker.isRunning():
+            return
+        self._on_action()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._restart_transmission_after_stop = False
         self._stop_broadcast_elapsed_timer()
         self._set_map_click_blocked(False)
         if self._worker is not None and self._worker.isRunning():
