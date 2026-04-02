@@ -301,27 +301,68 @@ _ACTION_BTN_STYLE_TX = (
     "font-family: 'Menlo', 'Consolas', 'DejaVu Sans Mono', 'Courier New'; }"
 )
 
-# Фон как у панели бара (palette(window)); скругление требует непустого стиля кнопки.
+# Явные цвета: на X11/Fusion фон по умолчанию у виджетов другой, чем на macOS.
+_UI_BOTTOM_BAR_BG = "#2e2e2e"
+_UI_PANEL_BLACK = "#000000"
+_UI_TEXT_ON_DARK = "#e8e8e8"
+_UI_TEXT_MUTED = "#9e9e9e"
+_UI_BAR_BTN_BG = "#3d3d3d"
+_UI_BAR_BTN_HOVER = "#4a4a4a"
+_UI_BAR_BTN_PRESSED = "#353535"
+
+# Кнопки эфемерид / координат на тёмно-серой нижней панели (без palette(...)).
 _EPHEM_BTN_STYLE = (
     "QPushButton {"
     "  border-radius: 4px;"
     "  padding: 6px 10px;"
     "  text-align: left;"
-    "  background-color: palette(window);"
-    "  color: #ffffff;"
+    f"  background-color: {_UI_BAR_BTN_BG};"
+    f"  color: {_UI_TEXT_ON_DARK};"
     "  border: none;"
     "  outline: none;"
     "}"
     "QPushButton:hover {"
-    "  background-color: palette(light);"
-    "  color: #ffffff;"
+    f"  background-color: {_UI_BAR_BTN_HOVER};"
+    f"  color: {_UI_TEXT_ON_DARK};"
     "}"
-    "QPushButton:pressed { background-color: palette(mid); }"
+    f"QPushButton:pressed {{ background-color: {_UI_BAR_BTN_PRESSED}; }}"
     "QPushButton:disabled {"
-    "  background-color: palette(window);"
-    "  color: #9e9e9e;"
+    f"  background-color: {_UI_BOTTOM_BAR_BG};"
+    f"  color: {_UI_TEXT_MUTED};"
     "}"
 )
+
+# Нижняя полоса под картой.
+_BOTTOM_BAR_WRAP_STYLE = f"QWidget#BottomBar {{ background-color: {_UI_BOTTOM_BAR_BG}; }}"
+
+# Мелкие кнопки на нижней панели (⌖, журнал, полный экран).
+_BAR_CHROME_BTN_STYLE = (
+    f"QPushButton {{ background-color: {_UI_BAR_BTN_BG}; color: {_UI_TEXT_ON_DARK}; "
+    "border: none; border-radius: 4px; }"
+    f"QPushButton:hover {{ background-color: {_UI_BAR_BTN_HOVER}; }}"
+    f"QPushButton:pressed {{ background-color: {_UI_BAR_BTN_PRESSED}; }}"
+)
+
+# Журнал и список истории — чёрный фон (одинаково на всех платформах).
+_LOG_TEXT_STYLE = (
+    f"QTextEdit {{ background-color: {_UI_PANEL_BLACK}; color: {_UI_TEXT_ON_DARK}; "
+    "border: none; }"
+    "QScrollBar:vertical { background: #1a1a1a; width: 12px; margin: 0; }"
+    "QScrollBar::handle:vertical { background: #555555; min-height: 24px; border-radius: 4px; }"
+    "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+)
+
+_HISTORY_LIST_STYLE = (
+    f"QListWidget {{ background-color: {_UI_PANEL_BLACK}; color: {_UI_TEXT_ON_DARK}; "
+    "border: none; }"
+    "QListWidget::item { margin-bottom: 10px; }"
+    "QScrollBar:vertical { background: #1a1a1a; width: 12px; margin: 0; }"
+    "QScrollBar::handle:vertical { background: #555555; min-height: 24px; border-radius: 4px; }"
+    "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+)
+
+_HISTORY_PANEL_STYLE = f"QWidget#HistorySidePanel {{ background-color: {_UI_PANEL_BLACK}; }}"
+_HISTORY_TITLE_STYLE = f"color: {_UI_TEXT_ON_DARK}; background: transparent;"
 
 
 def _safe_wait_thread(thread: QThread | None, ms: int) -> None:
@@ -397,6 +438,7 @@ class MainWindow(QMainWindow):
         self._recenter_btn = QPushButton("⌖")
         self._recenter_btn.setToolTip("Перейти к выбранным координатам")
         self._recenter_btn.setFixedWidth(36)
+        self._recenter_btn.setStyleSheet(_BAR_CHROME_BTN_STYLE)
         self._recenter_btn.clicked.connect(self._on_recenter_map)
 
         self._refresh_hint_initial()
@@ -425,28 +467,35 @@ class MainWindow(QMainWindow):
         logs_col.addWidget(self._fullscreen_btn)
         bar.addLayout(logs_col)
 
+        self._toggle_logs_btn.setStyleSheet(_BAR_CHROME_BTN_STYLE)
+        self._fullscreen_btn.setStyleSheet(_BAR_CHROME_BTN_STYLE)
+
         self._log = QTextEdit()
         self._log.setReadOnly(True)
         self._log.setPlaceholderText("Здесь появится журнал запуска симуляции…")
         self._log.setMinimumWidth(200)
+        self._log.setStyleSheet(_LOG_TEXT_STYLE)
 
         self._bar_wrap = QWidget()
+        self._bar_wrap.setObjectName("BottomBar")
+        self._bar_wrap.setStyleSheet(_BOTTOM_BAR_WRAP_STYLE)
         bar_l = QVBoxLayout(self._bar_wrap)
         bar_l.setContentsMargins(8, 4, 8, 4)
         bar_l.addLayout(bar)
 
         self._history_panel = QWidget()
+        self._history_panel.setObjectName("HistorySidePanel")
+        self._history_panel.setStyleSheet(_HISTORY_PANEL_STYLE)
         self._history_panel.setVisible(False)
         hist_lay = QVBoxLayout(self._history_panel)
         hist_lay.setContentsMargins(8, 8, 8, 8)
         _hist_title = QLabel("История локаций")
+        _hist_title.setStyleSheet(_HISTORY_TITLE_STYLE)
         hist_lay.addWidget(_hist_title)
         self._history_list = QListWidget()
         self._history_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._history_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._history_list.setStyleSheet(
-            "QListWidget::item { margin-bottom: 10px; }",
-        )
+        self._history_list.setStyleSheet(_HISTORY_LIST_STYLE)
         hist_lay.addWidget(self._history_list, stretch=1)
 
         self._left_panel = QWidget()
@@ -505,10 +554,10 @@ class MainWindow(QMainWindow):
             pick_btn = QPushButton(format_history_entry_label(entry))
             pick_btn.setFlat(True)
             pick_btn.setStyleSheet(
-                "QPushButton { text-align: left; padding: 4px 2px; border: none; "
-                "background: transparent; }"
-                "QPushButton:hover { background: palette(alternate-base); }"
-                "QPushButton:pressed { background: palette(midlight); }"
+                f"QPushButton {{ text-align: left; padding: 4px 2px; border: none; "
+                f"background: transparent; color: {_UI_TEXT_ON_DARK}; }}"
+                "QPushButton:hover { background: #333333; }"
+                "QPushButton:pressed { background: #444444; }"
             )
             pick_btn.clicked.connect(
                 lambda _c=False, la=lat, ln=lng, el=elev: self._apply_history_entry(la, ln, el),
