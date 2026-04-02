@@ -76,7 +76,6 @@ MAP_HTML = """<!DOCTYPE html>
       background: #444;
       padding: 8px 10px;
       border-radius: 6px;
-      box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
     }}
     #map-search-input {{
       flex: 1;
@@ -91,11 +90,11 @@ MAP_HTML = """<!DOCTYPE html>
       padding: 8px 14px;
       font-size: 14px;
       cursor: pointer;
-      border: 1px solid #2e7d32;
+      border: none;
       border-radius: 4px;
-      background: #2e7d32;
+      background: #666666;
       color: #fff;
-      font-weight: 600;
+      font-weight: 300;
     }}
     #map-search-btn:hover {{ background: #1b5e20; }}
   </style>
