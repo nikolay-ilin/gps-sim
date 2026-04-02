@@ -432,19 +432,32 @@ class MainWindow(QMainWindow):
         self._location_btn = QPushButton()
         self._location_btn.setStyleSheet(_EPHEM_BTN_STYLE)
         self._location_btn.setFixedWidth(180)
-        self._location_btn.setToolTip("Текущая точка; открыть историю локаций")
-        self._location_btn.clicked.connect(self._on_location_btn_clicked)
+        self._location_btn.setToolTip(
+            "Текущая точка; нажмите, чтобы перейти к ней на карте",
+        )
+        self._location_btn.clicked.connect(self._on_recenter_map)
 
-        self._recenter_btn = QPushButton("⌖")
-        self._recenter_btn.setToolTip("Перейти к выбранным координатам")
-        self._recenter_btn.setFixedWidth(36)
-        self._recenter_btn.setStyleSheet(_BAR_CHROME_BTN_STYLE)
-        self._recenter_btn.clicked.connect(self._on_recenter_map)
+        self._history_btn = QPushButton()
+        self._history_btn.setFixedWidth(36)
+        self._history_btn.setStyleSheet(_BAR_CHROME_BTN_STYLE)
+        self._history_btn.clicked.connect(self._on_history_btn_clicked)
+
+        self._autostart_btn = QPushButton("⌖")
+        self._autostart_btn.setToolTip("Перейти к выбранным координатам")
+        self._autostart_btn.setFixedWidth(36)
+        self._autostart_btn.setStyleSheet(_BAR_CHROME_BTN_STYLE)
+        self._autostart_btn.clicked.connect(self._on_recenter_map)
 
         self._refresh_hint_initial()
 
+        history_col = QVBoxLayout()
+        history_col.setSpacing(4)
+        history_col.setContentsMargins(0, 0, 0, 0)
+        history_col.addWidget(self._history_btn)
+        history_col.addWidget(self._autostart_btn)
+
         bar = QHBoxLayout()
-        bar.addWidget(self._recenter_btn)
+        bar.addLayout(history_col)
         bar.addWidget(self._location_btn)
         bar.addWidget(self._action_btn, stretch=1)
         bar.addSpacing(12)
@@ -513,6 +526,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self._apply_logs_panel_visibility()
+        self._apply_history_panel_button_appearance()
         self._apply_fullscreen_button_appearance()
 
     def _apply_logs_panel_visibility(self) -> None:
@@ -530,9 +544,20 @@ class MainWindow(QMainWindow):
         self._cfg = cfg
         self._apply_logs_panel_visibility()
 
-    def _on_location_btn_clicked(self) -> None:
+    def _apply_history_panel_button_appearance(self) -> None:
+        """Как у кнопки журнала: «>» — панель истории открыта, «<» — скрыта."""
+        show = self._history_panel.isVisible()
+        self._history_btn.setText("<" if show else ">")
+        self._history_btn.setToolTip(
+            "Скрыть панель истории локаций"
+            if show
+            else "Показать панель истории локаций слева",
+        )
+
+    def _on_history_btn_clicked(self) -> None:
         show = not self._history_panel.isVisible()
         self._history_panel.setVisible(show)
+        self._apply_history_panel_button_appearance()
         if show:
             self._populate_history_list()
             self._apply_history_panel_width()
@@ -599,7 +624,7 @@ class MainWindow(QMainWindow):
             f"window.__flyToSelection({lat}, {lng}); "
             "}",
         )
-        self._update_recenter_button_state()
+        self._update_autostart_button_state()
         self._sync_start_button_enabled()
 
     def _apply_history_panel_width(self) -> None:
@@ -821,9 +846,9 @@ class MainWindow(QMainWindow):
         if self._elev_thread is t:
             self._elev_thread = None
 
-    def _update_recenter_button_state(self) -> None:
+    def _update_autostart_button_state(self) -> None:
         ok = self._pending_lat is not None and self._pending_lng is not None
-        self._recenter_btn.setEnabled(ok)
+        self._autostart_btn.setEnabled(ok)
 
     def _on_recenter_map(self) -> None:
         if self._pending_lat is None or self._pending_lng is None:
@@ -847,12 +872,12 @@ class MainWindow(QMainWindow):
                 self._location_btn.setText(_hint_text_coords_elevation(lat, lng, float(em)))
             else:
                 self._location_btn.setText(f"{lat:.6f}, {lng:.6f}\nвысота: —")
-        self._update_recenter_button_state()
+        self._update_autostart_button_state()
 
     def _on_map_click(self, lat: float, lng: float) -> None:
         self._pending_lat = lat
         self._pending_lng = lng
-        self._update_recenter_button_state()
+        self._update_autostart_button_state()
         self._fetch_seq += 1
         seq = self._fetch_seq
 
@@ -944,7 +969,7 @@ class MainWindow(QMainWindow):
                 self._refresh_hint_initial()
         else:
             self._refresh_hint_initial()
-        self._update_recenter_button_state()
+        self._update_autostart_button_state()
         self._refresh_ephem_button()
 
     def closeEvent(self, event: QCloseEvent) -> None:
