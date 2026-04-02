@@ -73,7 +73,7 @@ MAP_HTML = """<!DOCTYPE html>
       display: flex;
       gap: 8px;
       align-items: center;
-      background: rgba(255, 255, 255, 0.95);
+      background: #444;
       padding: 8px 10px;
       border-radius: 6px;
       box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
@@ -114,26 +114,18 @@ MAP_HTML = """<!DOCTYPE html>
     var bridge = null;
     var map = L.map('map').setView([{lat}, {lng}], {zoom});
     var mapAttr =
-      'Спутник: Esri, Maxar &mdash; '
-      'административные подписи: Esri, Garmin, OSM &mdash; '
-      'заведения и организации (POI): © OpenStreetMap, © CARTO';
+      'заведения и организации (POI): © OpenStreetMap, © CARTO'
+      'Спутник: Esri, Maxar &mdash; ';
+
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}',
-      {{ maxZoom: 19, attribution: mapAttr }}
+      {{ maxZoom: 19, opacity: 1, attribution: mapAttr }}
     ).addTo(map);
     L.tileLayer(
       'https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{{z}}/{{y}}/{{x}}',
       {{ maxZoom: 19, opacity: 1, attribution: '' }}
     ).addTo(map);
-    L.tileLayer(
-      'https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}.png',
-      {{
-        subdomains: 'abcd',
-        maxZoom: 19,
-        opacity: 0.38,
-        attribution: '',
-      }}
-    ).addTo(map);
+
     var marker = L.marker([{lat}, {lng}]).addTo(map);
     var searchInput = document.getElementById('map-search-input');
     var searchBtn = document.getElementById('map-search-btn');
@@ -335,12 +327,25 @@ _EPHEM_BTN_STYLE = (
 # Нижняя полоса под картой.
 _BOTTOM_BAR_WRAP_STYLE = f"QWidget#BottomBar {{ background-color: {_UI_BOTTOM_BAR_BG}; }}"
 
-# Мелкие кнопки на нижней панели (⌖, журнал, полный экран).
+# Мелкие кнопки на нижней панели (журнал, полный экран).
 _BAR_CHROME_BTN_STYLE = (
     f"QPushButton {{ background-color: {_UI_BAR_BTN_BG}; color: {_UI_TEXT_ON_DARK}; "
     "border: none; border-radius: 4px; }"
     f"QPushButton:hover {{ background-color: {_UI_BAR_BTN_HOVER}; }}"
     f"QPushButton:pressed {{ background-color: {_UI_BAR_BTN_PRESSED}; }}"
+)
+
+# Переключатель автозапуска трансляции: выключен — как мелкие кнопки; включен — синий.
+_AUTOSTART_BTN_STYLE = (
+    "QPushButton {"
+    f"  background-color: {_UI_BAR_BTN_BG}; color: {_UI_TEXT_ON_DARK}; "
+    "  border: none; border-radius: 4px; font-weight: 700; padding: 2px;"
+    "}"
+    f"QPushButton:hover:!checked {{ background-color: {_UI_BAR_BTN_HOVER}; }}"
+    f"QPushButton:pressed:!checked {{ background-color: {_UI_BAR_BTN_PRESSED}; }}"
+    "QPushButton:checked { background-color: #1565c0; color: #ffffff; }"
+    "QPushButton:checked:hover { background-color: #1976d2; }"
+    "QPushButton:checked:pressed { background-color: #0d47a1; }"
 )
 
 # Журнал и список истории — чёрный фон (одинаково на всех платформах).
@@ -400,6 +405,8 @@ class MainWindow(QMainWindow):
         self._show_logs_panel = bool(self._cfg.get("ui_show_logs_panel", False))
         self._first_show_handled = False
         self._fullscreen_persist_enabled = False
+        self._autostart_startup_done = False
+        self._autostart_elev_retries = 0
 
         self._view = QWebEngineView()
         s = self._view.settings()
@@ -442,11 +449,11 @@ class MainWindow(QMainWindow):
         self._history_btn.setStyleSheet(_BAR_CHROME_BTN_STYLE)
         self._history_btn.clicked.connect(self._on_history_btn_clicked)
 
-        self._autostart_btn = QPushButton("⌖")
-        self._autostart_btn.setToolTip("Перейти к выбранным координатам")
+        self._autostart_btn = QPushButton("▶︎")
+        self._autostart_btn.setCheckable(True)
         self._autostart_btn.setFixedWidth(36)
-        self._autostart_btn.setStyleSheet(_BAR_CHROME_BTN_STYLE)
-        self._autostart_btn.clicked.connect(self._on_recenter_map)
+        self._autostart_btn.setStyleSheet(_AUTOSTART_BTN_STYLE)
+        self._autostart_btn.toggled.connect(self._on_autostart_toggled)
 
         self._refresh_hint_initial()
 
@@ -527,6 +534,7 @@ class MainWindow(QMainWindow):
 
         self._apply_logs_panel_visibility()
         self._apply_history_panel_button_appearance()
+        self._apply_autostart_button_appearance()
         self._apply_fullscreen_button_appearance()
 
     def _apply_logs_panel_visibility(self) -> None:
@@ -543,6 +551,57 @@ class MainWindow(QMainWindow):
         save_settings(cfg)
         self._cfg = cfg
         self._apply_logs_panel_visibility()
+
+    def _apply_autostart_button_appearance(self) -> None:
+        """Синхронизация переключателя «автозапуск трансляции при старте» с self._cfg."""
+        on = bool(self._cfg.get("ui_autostart_transmission", False))
+        self._autostart_btn.blockSignals(True)
+        self._autostart_btn.setChecked(on)
+        self._autostart_btn.blockSignals(False)
+        self._autostart_btn.setToolTip(
+            "Автозапуск трансляции при старте приложения включён. Нажмите, чтобы отключить."
+            if on
+            else "Включить автозапуск трансляции при старте приложения.",
+        )
+
+    def _on_autostart_toggled(self, checked: bool) -> None:
+        cfg = load_settings()
+        cfg["ui_autostart_transmission"] = checked
+        save_settings(cfg)
+        self._cfg = cfg
+        self._apply_autostart_button_appearance()
+
+    def _try_autostart_transmission_if_configured(self) -> None:
+        """Один раз за сеанс: запуск трансляции, если в настройках включён автозапуск."""
+        self._cfg = load_settings()
+        if not bool(self._cfg.get("ui_autostart_transmission", False)):
+            return
+        if self._autostart_startup_done:
+            return
+        if self._worker is not None and self._worker.isRunning():
+            self._autostart_startup_done = True
+            return
+        if self._elev_thread is not None and self._elev_thread.isRunning():
+            self._autostart_elev_retries += 1
+            if self._autostart_elev_retries > 50:
+                self._autostart_startup_done = True
+                self._append_log(
+                    "[автозапуск] пропущен: ожидание высоты заняло слишком много времени.\n",
+                )
+                return
+            QTimer.singleShot(200, self._try_autostart_transmission_if_configured)
+            return
+        self._autostart_elev_retries = 0
+        if self._brdc_thread is not None and self._brdc_thread.isRunning():
+            return
+        if self._pending_lat is None or self._pending_lng is None:
+            self._autostart_startup_done = True
+            self._append_log(
+                "[автозапуск] нет сохранённой точки — выберите координаты на карте.\n",
+            )
+            return
+        self._autostart_startup_done = True
+        self._on_action()
 
     def _apply_history_panel_button_appearance(self) -> None:
         """Как у кнопки журнала: «>» — панель истории открыта, «<» — скрыта."""
@@ -624,7 +683,6 @@ class MainWindow(QMainWindow):
             f"window.__flyToSelection({lat}, {lng}); "
             "}",
         )
-        self._update_autostart_button_state()
         self._sync_start_button_enabled()
 
     def _apply_history_panel_width(self) -> None:
@@ -640,7 +698,7 @@ class MainWindow(QMainWindow):
 
     def _apply_fullscreen_button_appearance(self) -> None:
         if self._is_fullscreen():
-            self._fullscreen_btn.setText("⇲")
+            self._fullscreen_btn.setText("×")
             self._fullscreen_btn.setToolTip("Выйти из полного экрана")
         else:
             self._fullscreen_btn.setText("⇱")
@@ -688,6 +746,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, self._restore_fullscreen_session)
             else:
                 QTimer.singleShot(0, self._enable_fullscreen_persist)
+            QTimer.singleShot(600, self._try_autostart_transmission_if_configured)
         if self._brdc_startup_scheduled:
             return
         self._brdc_startup_scheduled = True
@@ -828,6 +887,7 @@ class MainWindow(QMainWindow):
         self._brdc_thread = None
         self._cfg = load_settings()
         self._refresh_ephem_button()
+        self._try_autostart_transmission_if_configured()
 
     def _set_map_click_blocked(self, blocked: bool) -> None:
         """Синхронизация с JS: разрешить/запретить следующий клик по карте."""
@@ -845,10 +905,6 @@ class MainWindow(QMainWindow):
     def _clear_elev_thread_ref(self, t: ElevationFetchThread) -> None:
         if self._elev_thread is t:
             self._elev_thread = None
-
-    def _update_autostart_button_state(self) -> None:
-        ok = self._pending_lat is not None and self._pending_lng is not None
-        self._autostart_btn.setEnabled(ok)
 
     def _on_recenter_map(self) -> None:
         if self._pending_lat is None or self._pending_lng is None:
@@ -872,12 +928,10 @@ class MainWindow(QMainWindow):
                 self._location_btn.setText(_hint_text_coords_elevation(lat, lng, float(em)))
             else:
                 self._location_btn.setText(f"{lat:.6f}, {lng:.6f}\nвысота: —")
-        self._update_autostart_button_state()
 
     def _on_map_click(self, lat: float, lng: float) -> None:
         self._pending_lat = lat
         self._pending_lng = lng
-        self._update_autostart_button_state()
         self._fetch_seq += 1
         seq = self._fetch_seq
 
@@ -969,7 +1023,6 @@ class MainWindow(QMainWindow):
                 self._refresh_hint_initial()
         else:
             self._refresh_hint_initial()
-        self._update_autostart_button_state()
         self._refresh_ephem_button()
 
     def closeEvent(self, event: QCloseEvent) -> None:

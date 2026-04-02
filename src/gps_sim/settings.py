@@ -10,7 +10,7 @@ from typing import Any
 DEFAULT_DURATION_MINUTES = 24 * 60
 
 # Параметры конвейера gps-sdr-sim → hackrf_transfer (можно переопределить в settings.json).
-# hackrf_transfer_path — необязательный полный путь к бинарю, если его нет в PATH (например GUI без shell PATH).
+# hackrf_transfer_path — полный путь к бинарю, если нет в PATH (например GUI без shell PATH).
 DEFAULT_SIM_BITS = 8
 DEFAULT_SIM_SAMPLE_RATE_HZ = 2_600_000
 DEFAULT_HACKRF_FREQ_HZ = 1_575_420_000
@@ -19,7 +19,8 @@ DEFAULT_HACKRF_AMP = 1
 
 # UI: ui_show_logs_panel — bool, показывать ли панель журнала справа (50% ширины).
 # UI: ui_fullscreen — bool, запускать ли окно в полноэкранном режиме (как в последнем сеансе).
-# История трансляций: файл history.json в том же каталоге, что и settings.json (см. gps_sim.history).
+# UI: ui_autostart_transmission — bool, автозапуск трансляции при старте приложения.
+# История трансляций: history.json рядом с settings.json (см. gps_sim.history).
 
 def settings_path() -> Path:
     """Путь к файлу настроек. Переменная GPS_SIM_SETTINGS — полный путь к JSON (для тестов)."""
