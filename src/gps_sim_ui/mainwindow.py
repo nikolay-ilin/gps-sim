@@ -36,7 +36,11 @@ from gps_sim.history import (
     remove_history_entry_at_coords,
     sorted_history_entries,
 )
-from gps_sim.run_sim import _bundled_gps_sdr_sim_path, _is_executable_file
+from gps_sim.run_sim import (
+    _bundled_gps_sdr_sim_path,
+    _gps_sdr_sim_debug,
+    _is_executable_file,
+)
 from gps_sim.settings import broadcast_ephemeris_file, load_settings, save_settings
 from gps_sim_ui.brdc_thread import BrdcFetchThread
 from gps_sim_ui.bridge import MapBridge
@@ -197,14 +201,21 @@ MAP_HTML = """<!DOCTYPE html>
 def needs_manual_gps_sdr_sim_path(cfg: dict[str, Any]) -> bool:
     """Нужен ли явный путь к бинарнику (нет встроенного бинарника для ОС и PATH)."""
     if _bundled_gps_sdr_sim_path() is not None:
+        _gps_sdr_sim_debug("UI: встроенный gps-sdr-sim найден — диалог выбора файла не нужен")
         return False
     raw = cfg.get("gps_sdr_sim_path")
     if raw:
         p = Path(str(raw)).expanduser().resolve()
         if _is_executable_file(p):
+            _gps_sdr_sim_debug(f"UI: исполняемый gps_sdr_sim_path в настройках: {p}")
             return False
     if shutil.which("gps-sdr-sim"):
+        _gps_sdr_sim_debug("UI: gps-sdr-sim есть в PATH")
         return False
+    _gps_sdr_sim_debug(
+        "UI: нужен ручной выбор файла (нет встроенного бинарника, нет исполняемого пути в "
+        "настройках и нет gps-sdr-sim в PATH)"
+    )
     return True
 
 

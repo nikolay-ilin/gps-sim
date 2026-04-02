@@ -36,6 +36,18 @@ HACKRF_HOST_TOOLS_DOC_URL = (
 )
 
 
+def _gps_sdr_sim_debug_enabled() -> bool:
+    v = os.environ.get("GPS_SIM_DEBUG", "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _gps_sdr_sim_debug(msg: str) -> None:
+    """Подробный вывод в stderr при GPS_SIM_DEBUG=1 (разбор выбора встроенного gps-sdr-sim)."""
+    if not _gps_sdr_sim_debug_enabled():
+        return
+    print(f"[gps-sdr-sim debug] {msg}", file=sys.stderr)
+
+
 def _is_executable_file(path: Path) -> bool:
     if not path.is_file():
         return False
@@ -88,12 +100,27 @@ def _resolve_hackrf_transfer(cfg: dict[str, Any]) -> str | None:
     return None
 
 
+def _uname_machine() -> str:
+    """Архитектура из uname (на Linux часто совпадает с platform.machine(), но логируем отдельно)."""
+    try:
+        return os.uname().machine
+    except (AttributeError, OSError):
+        return ""
+
+
 def _bundled_gps_sdr_sim_filename() -> str | None:
     """Имя встроенного бинарника для текущей ОС/архитектуры или None (остальные платформы)."""
     machine = platform.machine().lower()
-    if sys.platform == "darwin" and machine in ("arm64", "aarch64"):
+    uname_m = _uname_machine().lower()
+    # Если platform.machine() пустой, берём uname (не подменяем armv7l на aarch64 — разные ABI).
+    effective = machine or uname_m
+    _gps_sdr_sim_debug(
+        f"платформа: sys.platform={sys.platform!r} platform.machine()={machine!r} "
+        f"os.uname().machine={uname_m!r} effective={effective!r}"
+    )
+    if sys.platform == "darwin" and effective in ("arm64", "aarch64"):
         return "gps-sdr-sim-macos-apple"
-    if sys.platform == "linux" and machine in ("aarch64", "arm64"):
+    if sys.platform == "linux" and effective in ("aarch64", "arm64"):
         return "gps-sdr-sim-debian-arm64"
     return None
 
@@ -104,6 +131,18 @@ def _bundled_gps_sdr_sim_path() -> Path | None:
     if name is None:
         return None
     p = Path(__file__).resolve().parent / "bin" / name
+    _gps_sdr_sim_debug(f"ожидаемый встроенный бинарник: {p}")
+    if p.is_file() and not os.access(p, os.X_OK):
+        print(
+            f"Встроенный gps-sdr-sim найден, но не исполняемый: {p}. "
+            "Выполните: chmod +x <путь> или переустановите пакет.",
+            file=sys.stderr,
+        )
+    if not p.is_file():
+        _gps_sdr_sim_debug(
+            "файл отсутствует (часто при pip install -e без бинарника в дереве исходников "
+            "или неполной установке wheel)"
+        )
     if _is_executable_file(p):
         return p
     return None
@@ -119,6 +158,7 @@ def _try_resolve_bundled_gps_sdr_sim(cfg: dict[str, Any]) -> str | None:
         cfg["gps_sdr_sim_path"] = resolved
         save_settings(cfg)
         print(f"В настройки сохранён путь к встроенному gps-sdr-sim: {resolved}")
+    _gps_sdr_sim_debug(f"используется встроенный бинарник: {resolved}")
     return resolved
 
 
@@ -126,8 +166,14 @@ def _resolve_gps_sdr_sim_path(cfg: dict[str, Any], *, interactive: bool) -> str:
     raw = cfg.get("gps_sdr_sim_path")
     if raw:
         p = Path(str(raw)).expanduser().resolve()
+        _gps_sdr_sim_debug(f"gps_sdr_sim_path в настройках: {raw!r} → {p}")
         if _is_executable_file(p):
+            _gps_sdr_sim_debug("взят путь из настроек (исполняемый файл)")
             return str(p)
+        _gps_sdr_sim_debug(
+            "путь из настроек не подходит (нет файла или нет прав на исполнение) — "
+            "пробуем встроенный бинарник и PATH"
+        )
 
     bundled = _try_resolve_bundled_gps_sdr_sim(cfg)
     if bundled is not None:
@@ -135,8 +181,13 @@ def _resolve_gps_sdr_sim_path(cfg: dict[str, Any], *, interactive: bool) -> str:
 
     which = shutil.which("gps-sdr-sim")
     if which:
+        _gps_sdr_sim_debug(f"взят gps-sdr-sim из PATH: {which}")
         return which
 
+    _gps_sdr_sim_debug(
+        "исполняемый gps-sdr-sim не найден: нет подходящего встроенного бинарника для этой "
+        "платформы, неверный gps_sdr_sim_path в настройках и нет gps-sdr-sim в PATH"
+    )
     if not interactive:
         print(
             "Не найден исполняемый gps-sdr-sim: задайте ключ gps_sdr_sim_path в настройках "
